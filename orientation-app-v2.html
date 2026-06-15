@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gestion d'Orientation Post-Bac</title>
+  <script src="https://cdn.jsdelivr.net/npm/emailjs-com@3/dist/email.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f5f5f5;
+      color: #333;
+      line-height: 1.6;
+    }
+    .container { max-width: 1000px; margin: 0 auto; padding: 1rem; }
+    .header { 
+      background: white; 
+      padding: 2rem; 
+      border-radius: 8px;
+      border: 1px solid #eee;
+      margin-bottom: 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header h1 { font-size: 28px; margin: 0; }
+    .admin-btn {
+      padding: 8px 16px;
+      background: #333;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .admin-btn:hover { background: #555; }
+    
+    .tabs {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 2rem;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 12px;
+      border: 1px solid #ddd;
+      background: white;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+    .tab-btn.active {
+      background: #0070f3;
+      color: white;
+      border-color: #0070f3;
+    }
+    .tab-btn:hover { border-color: #0070f3; }
+    
+    .content {
+      background: white;
+      padding: 2rem;
+      border-radius: 8px;
+      border: 1px solid #eee;
+      display: none;
+    }
+    .content.active { display: block; }
+    
+    .form-section {
+      margin-bottom: 1.5rem;
+    }
+    .form-section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #666;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+    }
+    
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .form-row.full { grid-template-columns: 1fr; }
+    
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 4px;
+      color: #333;
+    }
+    input, select, textarea {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: #0070f3;
+      box-shadow: 0 0 0 2px rgba(0, 112, 243, 0.1);
+    }
+    textarea { resize: vertical; min-height: 80px; }
+    
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+    }
+    .checkbox-group input {
+      width: auto;
+      cursor: pointer;
+    }
+    
+    .button-group {
+      display: flex;
+      gap: 12px;
+      margin-top: 1.5rem;
+    }
+    button {
+      flex: 1;
+      padding: 10px;
+      border: 1px solid #ddd;
+      background: white;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+    button.primary {
+      background: #0070f3;
+      color: white;
+      border-color: #0070f3;
+    }
+    button:hover { border-color: #0070f3; }
+    button.primary:hover { background: #0051cc; }
+    
+    .message {
+      padding: 12px;
+      border-radius: 6px;
+      margin-bottom: 1rem;
+      font-size: 14px;
+      display: none;
+    }
+    .success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    .error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    .info {
+      background: #d1ecf1;
+      color: #0c5460;
+      border: 1px solid #bee5eb;
+    }
+    
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+      margin-bottom: 1.5rem;
+    }
+    .stat-card {
+      background: #f9f9f9;
+      padding: 1rem;
+      border-radius: 6px;
+      border: 1px solid #eee;
+    }
+    .stat-label { font-size: 12px; color: #666; margin-bottom: 4px; }
+    .stat-value { font-size: 24px; font-weight: 600; color: #0070f3; }
+    
+    .table-container {
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th {
+      background: #f5f5f5;
+      padding: 10px;
+      text-align: left;
+      font-weight: 600;
+      border-bottom: 2px solid #ddd;
+    }
+    td {
+      padding: 10px;
+      border-bottom: 1px solid #eee;
+    }
+    tr:hover { background: #f9f9f9; }
+    
+    .btn-delete {
+      background: #ff4444;
+      color: white;
+      border-color: #ff4444;
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+    .btn-delete:hover { background: #cc0000; }
+    
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      gap: 12px;
+    }
+    .toolbar h2 { font-size: 18px; margin: 0; }
+    
+    .login-box {
+      max-width: 400px;
+      margin: 2rem auto;
+      background: white;
+      padding: 2rem;
+      border-radius: 8px;
+      border: 1px solid #eee;
+      text-align: center;
+    }
+    .login-box h2 { margin-bottom: 1.5rem; }
+    .login-box input {
+      margin-bottom: 1rem;
+      width: 100%;
+    }
+    .login-box button {
+      width: 100%;
+    }
+    
+    @media (max-width: 768px) {
+      .form-row { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: 1fr; }
+      .button-group { flex-direction: column; }
+      .header { flex-direction: column; gap: 1rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Gestion d'Orientation Post-Bac</h1>
+      <button class="admin-btn" onclick="app.showAdminLogin()">Admin</button>
+    </div>
+
+    <div class="tabs" id="tabs" style="display: none;">
+      <button class="tab-btn active" data-tab="form">Ajouter une soumission</button>
+      <button class="tab-btn" data-tab="dashboard">Tableau de bord</button>
+    </div>
+
+    <!-- FORMULAIRE -->
+    <div id="form" class="content active">
+      <div class="message success" id="successMessage">✓ Merci ! Un email de confirmation a été envoyé à votre adresse.</div>
+      <div class="message error" id="errorMessage"></div>
+
+      <form id="orientationForm">
+        <div class="form-section">
+          <div class="form-section-title">Informations personnelles</div>
+          
+          <div class="form-row">
+            <div>
+              <label>Prénom *</label>
+              <input type="text" name="prenom" required>
+            </div>
+            <div>
+              <label>Nom *</label>
+              <input type="text" name="nom" required>
+            </div>
+          </div>
+
+          <div class="form-row full">
+            <label>Adresse email personnelle *</label>
+            <input type="email" name="email" required>
+          </div>
+
+          <div class="form-row">
+            <div>
+              <label>Année d'obtention du bac *</label>
+              <input type="number" name="annee_bac" min="2020" max="2030" value="2024" required>
+            </div>
+            <div>
+              <label>Type de bac *</label>
+              <select name="type_bac" required>
+                <option value="">-- Sélectionner --</option>
+                <option value="general">Bac général</option>
+                <option value="technologique">Bac technologique</option>
+                <option value="professionnel">Bac professionnel</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-row full">
+            <label>Spécialités du bac (optionnel)</label>
+            <input type="text" name="specialites" placeholder="ex: Maths, Physique, SVT">
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">Choix d'orientation</div>
+
+          <div class="form-row full">
+            <label>Domaine d'études *</label>
+            <select name="domaine" required>
+              <option value="">-- Sélectionner --</option>
+              <option value="sante">Santé</option>
+              <option value="sciences">Sciences</option>
+              <option value="ingenierie">Ingénierie</option>
+              <option value="informatique">Informatique / IT</option>
+              <option value="economie">Économie / Gestion</option>
+              <option value="droit">Droit</option>
+              <option value="lettres">Lettres / Humanités</option>
+              <option value="arts">Arts / Design</option>
+              <option value="tourisme">Tourisme / Hôtellerie</option>
+              <option value="autre">Autre</option>
+            </select>
+          </div>
+
+          <div class="form-row full">
+            <label>Intitulé des études *</label>
+            <input type="text" name="intitule" placeholder="ex: Licence Informatique, BTS SIO" required>
+          </div>
+
+          <div class="form-row full">
+            <label>Établissement choisi *</label>
+            <input type="text" name="etablissement" placeholder="ex: Université Paris-Saclay" required>
+          </div>
+
+          <div class="form-row">
+            <div>
+              <label>Ville *</label>
+              <input type="text" name="ville" required>
+            </div>
+            <div>
+              <label>Pays *</label>
+              <input type="text" name="pays" value="France" required>
+            </div>
+          </div>
+
+          <div class="form-row full">
+            <label>Raisons du choix (optionnel)</label>
+            <textarea name="raisons" placeholder="Expliquez brièvement votre choix..."></textarea>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="checkbox-group">
+            <input type="checkbox" id="confirmation" name="confirmation" required>
+            <label for="confirmation" style="margin: 0;">J'accepte que mes données soient utilisées à des fins statistiques</label>
+          </div>
+        </div>
+
+        <div class="button-group">
+          <button type="submit" class="primary">Soumettre</button>
+          <button type="reset">Réinitialiser</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- TABLEAU DE BORD (ADMIN) -->
+    <div id="dashboard" class="content">
+      <div class="toolbar">
+        <h2>Soumissions</h2>
+        <button id="exportBtn" class="primary">Exporter en CSV/Excel</button>
+      </div>
+
+      <div class="stats">
+        <div class="stat-card">
+          <div class="stat-label">Total de soumissions</div>
+          <div class="stat-value" id="totalCount">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Domaines différents</div>
+          <div class="stat-value" id="domainsCount">0</div>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <table id="dataTable">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Prénom</th>
+              <th>Nom</th>
+              <th>Email</th>
+              <th>Domaine</th>
+              <th>Établissement</th>
+              <th>Ville</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody">
+            <tr><td colspan="8" style="text-align: center; color: #999;">Aucune donnée pour le moment</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- LOGIN ADMIN -->
+    <div id="adminLogin" style="display: none;">
+      <div class="login-box">
+        <h2>Accès Administrateur</h2>
+        <div class="message info" style="display: block;">Entrez le mot de passe admin</div>
+        <input type="password" id="adminPassword" placeholder="Mot de passe">
+        <button class="primary" onclick="app.checkAdminPassword()">Se connecter</button>
+        <button onclick="app.closeAdminLogin()" style="margin-top: 12px; background: #f0f0f0; color: #333;">Annuler</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ⚠️ CONFIGURATION - À MODIFIER
+    const CONFIG = {
+      ADMIN_PASSWORD: 'admin2024', // ✅ CHANGEZ CE MOT DE PASSE !
+      EMAIL_SERVICE_ID: 'service_xxxxx', // À obtenir via EmailJS (voir instructions)
+      EMAIL_TEMPLATE_ID: 'template_xxxxx', // À obtenir via EmailJS
+      EMAIL_USER_ID: 'YOUR_USER_ID', // À obtenir via EmailJS
+      ADMIN_EMAIL: 'votre.email@example.com' // ✅ METTEZ VOTRE EMAIL ICI
+    };
+
+    const STORAGE_KEY = 'orientation_submissions';
+
+    class OrientationApp {
+      constructor() {
+        this.submissions = this.loadSubmissions();
+        this.isAdminLoggedIn = false;
+        this.setupEventListeners();
+        this.initEmailJS();
+      }
+
+      initEmailJS() {
+        // EmailJS sera configuré une fois que vous avez les clés
+        // Pour l'instant, on envoie juste un message local
+      }
+
+      loadSubmissions() {
+        const data = localStorage.getItem(STORAGE_KEY);
+        return data ? JSON.parse(data) : [];
+      }
+
+      saveSubmissions() {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.submissions));
+      }
+
+      setupEventListeners() {
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+          btn.addEventListener('click', (e) => this.switchTab(e.target.dataset.tab));
+        });
+        document.getElementById('orientationForm').addEventListener('submit', (e) => this.handleSubmit(e));
+        document.getElementById('exportBtn').addEventListener('click', () => this.exportCSV());
+      }
+
+      showAdminLogin() {
+        document.getElementById('adminLogin').style.display = 'block';
+        document.getElementById('adminPassword').focus();
+      }
+
+      closeAdminLogin() {
+        document.getElementById('adminLogin').style.display = 'none';
+      }
+
+      checkAdminPassword() {
+        const password = document.getElementById('adminPassword').value;
+        if (password === CONFIG.ADMIN_PASSWORD) {
+          this.isAdminLoggedIn = true;
+          document.getElementById('adminLogin').style.display = 'none';
+          document.getElementById('tabs').style.display = 'flex';
+          document.getElementById('form').classList.remove('active');
+          document.getElementById('dashboard').classList.add('active');
+          document.querySelectorAll('.tab-btn')[1].classList.add('active');
+          this.updateDashboard();
+        } else {
+          alert('❌ Mot de passe incorrect');
+          document.getElementById('adminPassword').value = '';
+        }
+      }
+
+      switchTab(tabName) {
+        if (!this.isAdminLoggedIn && tabName === 'dashboard') {
+          alert('Accès refusé. Utilisez le bouton Admin.');
+          return;
+        }
+        document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById(tabName).classList.add('active');
+        event.target.classList.add('active');
+
+        if (tabName === 'dashboard') {
+          this.updateDashboard();
+        }
+      }
+
+      handleSubmit(e) {
+        e.preventDefault();
+        
+        const formData = new FormData(e.target);
+        const data = {
+          id: Date.now(),
+          date: new Date().toLocaleDateString('fr-FR'),
+          ...Object.fromEntries(formData)
+        };
+
+        this.submissions.push(data);
+        this.saveSubmissions();
+
+        // Envoyer email de confirmation
+        this.sendConfirmationEmail(data);
+
+        const successMsg = document.getElementById('successMessage');
+        successMsg.style.display = 'block';
+        setTimeout(() => {
+          successMsg.style.display = 'none';
+        }, 5000);
+
+        e.target.reset();
+      }
+
+      sendConfirmationEmail(data) {
+        // Si EmailJS est configuré, envoyer un vrai email
+        // Pour l'instant, juste une confirmation locale
+        console.log('Email de confirmation prêt à envoyer à:', data.email);
+      }
+
+      updateDashboard() {
+        const tbody = document.getElementById('tableBody');
+        
+        if (this.submissions.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #999;">Aucune donnée pour le moment</td></tr>';
+          document.getElementById('totalCount').textContent = '0';
+          document.getElementById('domainsCount').textContent = '0';
+          return;
+        }
+
+        tbody.innerHTML = this.submissions.map(s => `
+          <tr>
+            <td>${s.date}</td>
+            <td>${s.prenom}</td>
+            <td>${s.nom}</td>
+            <td>${s.email}</td>
+            <td>${s.domaine}</td>
+            <td>${s.etablissement}</td>
+            <td>${s.ville}</td>
+            <td>
+              <button class="btn-delete" onclick="app.deleteSubmission(${s.id})">Supprimer</button>
+            </td>
+          </tr>
+        `).join('');
+
+        const domains = new Set(this.submissions.map(s => s.domaine));
+        document.getElementById('totalCount').textContent = this.submissions.length;
+        document.getElementById('domainsCount').textContent = domains.size;
+      }
+
+      deleteSubmission(id) {
+        if (!confirm('Confirmer la suppression ?')) return;
+        this.submissions = this.submissions.filter(s => s.id !== id);
+        this.saveSubmissions();
+        this.updateDashboard();
+      }
+
+      exportCSV() {
+        if (this.submissions.length === 0) {
+          alert('Aucune donnée à exporter');
+          return;
+        }
+
+        const headers = ['Date', 'Prénom', 'Nom', 'Email', 'Année Bac', 'Type Bac', 'Spécialités', 
+                        'Domaine', 'Intitulé', 'Établissement', 'Ville', 'Pays', 'Raisons'];
+        
+        let csv = headers.join(',') + '\n';
+        
+        this.submissions.forEach(s => {
+          const row = [
+            s.date, s.prenom, s.nom, s.email, s.annee_bac, s.type_bac, s.specialites,
+            s.domaine, s.intitule, s.etablissement, s.ville, s.pays, s.raisons
+          ];
+          csv += row.map(cell => `"${String(cell || '').replace(/"/g, '""')}"`).join(',') + '\n';
+        });
+
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `orientations_${new Date().toISOString().slice(0,10)}.csv`;
+        link.click();
+      }
+    }
+
+    const app = new OrientationApp();
+  </script>
+</body>
+</html>
