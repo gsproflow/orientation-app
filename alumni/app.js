@@ -148,7 +148,7 @@ function shell(inner, { wide = false } = {}) {
   const act = (r) => (h === r ? 'active' : '');
   const nav = session
     ? `<nav class="nav" aria-label="Navigation principale">
-        ${approved ? `<a href="#/" class="${act('#/')}">Accueil</a>` : ''}
+        ${approved ? `<a href="#/" class="${act('#/')}">Accueil</a><a href="#/annuaire" class="${act('#/annuaire')}">Annuaire</a>` : ''}
         ${isAdmin ? `<a href="#/admin" class="${act('#/admin')}">Administration <span id="navBadge" class="badge" hidden></span></a>` : ''}
         ${approved ? `<a href="#/profil" class="${act('#/profil')}">Mon profil</a>` : ''}
         <button class="linkbtn" data-action="privacy">Vie privée</button>
@@ -214,6 +214,7 @@ function route() {
   if (s === 'draft') return viewForm();
   if (s === 'pending') return viewPending();
   if (s === 'rejected') return viewRejected();
+  if (h === '#/annuaire') return viewDirectory();
   if (h === '#/admin' && profile.role === 'admin') return viewAdmin();
   return viewHome();
 }
@@ -490,7 +491,7 @@ function viewForm() {
         <h2 class="section-title">Comment peut-on vous contacter ?</h2>
         <p class="hint" style="margin-bottom:6px">Vous choisissez les moyens de contact que vous acceptez. Vous pourrez les modifier à tout moment.</p>
         <div class="switches">
-          ${sw('contact_email', 'Par e-mail', false)}
+          ${sw('contact_email', 'Par e-mail (mon adresse sera visible par les membres)', false)}
           ${sw('contact_message', 'Par message dans l’application', false)}
           ${sw('contact_chat', 'Par chat', false)}
         </div>
@@ -504,7 +505,6 @@ function viewForm() {
           ${sw('show_location', 'Mon pays et ma ville', true)}
           ${sw('show_study', 'Mon établissement et ma formation', true)}
           ${sw('show_social', 'Mes réseaux sociaux', true)}
-          ${sw('show_email', 'Mon adresse e-mail', false)}
         </div>
       </section>
 
@@ -591,7 +591,7 @@ function readForm(form) {
     show_location: fd.has('show_location'),
     show_study: fd.has('show_study'),
     show_social: fd.has('show_social'),
-    show_email: fd.has('show_email'),
+    show_email: fd.has('contact_email'), // l'adresse n'est partagée que si le contact par e-mail est accepté
   };
   if (t === 'alumni') {
     out.graduation_year = parseInt(g('graduation_year'), 10) || null;
@@ -765,20 +765,143 @@ async function viewHome() {
     </section>
     <section class="card">
       <h2>Votre profil est validé</h2>
-      <p>Merci d’avoir rejoint la communauté du GSJC. Les fonctionnalités suivantes arrivent bientôt :</p>
+      <p>Merci d’avoir rejoint la communauté du GSJC. Parcourez l’annuaire pour trouver un ancien élève par pays, ville, école ou formation. Arrivent bientôt :</p>
       <ul class="soon" style="margin-top:10px">
-        <li>L’annuaire des alumni, avec recherche par pays, ville, école et formation</li>
         <li>La carte du monde des alumni</li>
         <li>La messagerie et le chat entre membres</li>
         <li>Les événements, les actualités et les offres de stage</li>
       </ul>
     </section>
     <div class="row">
-      <a class="btn" href="#/profil">Modifier mon profil</a>
+      <a class="btn" href="#/annuaire">Ouvrir l’annuaire</a>
+      <a class="btn ghost" href="#/profil">Modifier mon profil</a>
       ${isAdmin ? '<a class="btn ghost" href="#/admin">Ouvrir l’administration</a>' : ''}
     </div>`);
   photoUrl(profile.photo_path).then((u) => { if (u) $('#homeAvatar') && ($('#homeAvatar').innerHTML = avatarHtml(profile, u, 'lg')); });
   if (isAdmin) refreshBadge();
+}
+
+/* ------------------------------------------------------------------ */
+/* Annuaire des alumni                                                 */
+/* ------------------------------------------------------------------ */
+let dirRows = [];
+let dirShown = 24;
+let dirTok = 0;
+const DIR_PAGE = 24;
+const fold = (s) => (s || '').toString().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+async function viewDirectory() {
+  currentView = 'directory';
+  dirShown = DIR_PAGE;
+  shell(`
+    <div class="page-head"><h1>Annuaire des alumni</h1></div>
+    <div class="card filters">
+      <div class="field"><label for="dirQ" class="sr">Rechercher</label>
+        <input type="search" id="dirQ" placeholder="Rechercher un nom, une école, une formation, une ville…" autocomplete="off"></div>
+      <div class="grid2">
+        <div class="field"><label for="dirCountry" class="sr">Pays</label><select id="dirCountry"><option value="">Tous les pays</option></select></div>
+        <div class="field"><label for="dirYear" class="sr">Promotion</label><select id="dirYear"><option value="">Toutes les promotions</option></select></div>
+      </div>
+      <p class="small muted" id="dirCount" style="margin-top:-4px"></p>
+    </div>
+    <div id="dirList" class="cards"><p class="muted">Chargement…</p></div>
+    <div id="dirMore" class="row center" style="margin-top:14px"></div>`, { wide: true });
+
+  const { data, error } = await sb.rpc('directory_list');
+  const list = $('#dirList');
+  if (!list || currentView !== 'directory') return;
+  if (error) { list.innerHTML = `<p class="err">${esc(errMsg(error))}</p>`; return; }
+  dirRows = data || [];
+
+  const countries = [...new Set(dirRows.map((r) => r.country).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
+  const years = [...new Set(dirRows.map((r) => r.graduation_year).filter(Boolean))].sort((a, b) => b - a);
+  $('#dirCountry').insertAdjacentHTML('beforeend', countries.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join(''));
+  $('#dirYear').insertAdjacentHTML('beforeend', years.map((y) => `<option value="${esc(y)}">Promo ${esc(y)}</option>`).join(''));
+
+  const again = () => { dirShown = DIR_PAGE; renderDirectory(); };
+  $('#dirQ').addEventListener('input', again);
+  $('#dirCountry').addEventListener('change', again);
+  $('#dirYear').addEventListener('change', again);
+  renderDirectory();
+}
+
+async function renderDirectory() {
+  const tok = ++dirTok;
+  const list = $('#dirList');
+  if (!list) return;
+  const q = fold($('#dirQ').value.trim());
+  const country = $('#dirCountry').value;
+  const year = $('#dirYear').value;
+  const rows = dirRows.filter((r) =>
+    (!country || r.country === country) &&
+    (!year || String(r.graduation_year) === year) &&
+    (!q || fold([r.first_name, r.last_name, r.school, r.program, r.city, r.country].join(' ')).includes(q)));
+
+  $('#dirCount').textContent = rows.length === 1 ? '1 alumni' : `${rows.length} alumni`;
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty">${dirRows.length
+      ? 'Aucun alumni ne correspond à votre recherche. Essayez avec moins de critères.'
+      : 'Les premiers profils arrivent bientôt. Revenez nous voir !'}</div>`;
+    $('#dirMore').innerHTML = '';
+    return;
+  }
+  const shown = rows.slice(0, dirShown);
+  await photoUrls(shown.map((r) => r.photo_path));
+  if (tok !== dirTok || currentView !== 'directory' || !$('#dirList')) return; // une recherche plus récente a pris le relais
+  list.innerHTML = shown.map(memberCard).join('');
+  $('#dirMore').innerHTML = rows.length > shown.length
+    ? `<button class="btn ghost" data-action="dirMore">Afficher plus (${rows.length - shown.length})</button>` : '';
+}
+
+function memberCard(r) {
+  const url = urlCache.get(r.photo_path)?.url || null;
+  const name = `${r.first_name || ''} ${r.last_name || ''}`.trim();
+  const study = [r.program, r.school].filter(Boolean).map(esc).join(' · ');
+  const place = [r.city, r.country].filter(Boolean).map(esc).join(', ');
+  const tags = [r.contact_email && '✉ E-mail', r.contact_message && '💬 Message', r.contact_chat && '⚡ Chat']
+    .filter(Boolean).map((t) => `<span class="tag">${t}</span>`).join('');
+  return `<article class="member">
+    <div class="req-top">${avatarHtml(r, url, 'md')}
+      <div><h3>${esc(name)}${r.id === profile.id ? ' <span class="tag me">vous</span>' : ''}</h3>
+      <div class="sub">${r.graduation_year ? 'Promo ' + esc(r.graduation_year) : 'Ancien élève'}</div></div></div>
+    ${study ? `<p class="m-study">${study}</p>` : ''}
+    ${place ? `<p class="m-place">📍 ${place}</p>` : ''}
+    ${tags ? `<div class="tags">${tags}</div>` : ''}
+    <button class="btn ghost sm" data-action="viewMember" data-id="${esc(r.id)}">Voir le profil</button>
+  </article>`;
+}
+
+function openMember(id) {
+  const r = dirRows.find((x) => x.id === id);
+  if (!r) return;
+  const url = urlCache.get(r.photo_path)?.url || null;
+  const name = `${r.first_name || ''} ${r.last_name || ''}`.trim();
+  const kv = [];
+  if (r.program || r.school) kv.push(['Études', [r.program, r.school].filter(Boolean).map(esc).join(' — ')]);
+  if (r.city || r.country) kv.push(['Lieu', [r.city, r.country].filter(Boolean).map(esc).join(', ')]);
+  const links = [];
+  const li = safeLinkedin(r.linkedin);
+  if (li) links.push(`<a href="${esc(li)}" target="_blank" rel="noopener noreferrer">LinkedIn</a>`);
+  if (r.instagram) links.push(`<a href="${esc(instagramUrl(r.instagram))}" target="_blank" rel="noopener noreferrer">Instagram</a>`);
+  if (links.length) kv.push(['Réseaux', links.join(' · ')]);
+
+  const contact = [];
+  if (r.contact_email && r.email) {
+    contact.push(`<a class="btn sm" href="mailto:${esc(r.email)}?subject=${encodeURIComponent('Alumni GSJC Rabat')}">✉ Écrire par e-mail</a>`);
+  }
+  if (r.contact_message) contact.push('<button class="btn ghost sm" disabled>💬 Message dans l’app (bientôt)</button>');
+  if (r.contact_chat) contact.push('<button class="btn ghost sm" disabled>⚡ Chat (bientôt)</button>');
+
+  openModal(`
+    <div class="member-head">${avatarHtml(r, url, 'lg')}
+      <div><h2 style="margin:0">${esc(name)}</h2>
+      <p class="muted">Ancien élève${r.graduation_year ? ' · Promo ' + esc(r.graduation_year) : ''}</p></div></div>
+    ${kv.length ? `<dl class="kv" style="margin:14px 0">${kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>` : ''}
+    <h3 style="margin:14px 0 8px">Entrer en contact</h3>
+    ${r.id === profile.id ? '<p class="muted small">C’est votre profil : voici ce que les autres membres voient.</p>' : ''}
+    ${contact.length ? `<div class="row">${contact.join('')}</div>`
+      : '<p class="muted small">Cette personne n’a pas activé de moyen de contact pour le moment.</p>'}
+    <div class="row end" style="margin-top:16px"><button class="btn ghost" data-action="closeModal">Fermer</button></div>`);
 }
 
 /* ------------------------------------------------------------------ */
@@ -910,6 +1033,8 @@ const actions = {
   refreshAdmin: () => { loadStats(); loadAdminList(); },
   adminTab: (el) => { adminTab = el.dataset.tab; $$('.tabs button').forEach((b) => b.setAttribute('aria-selected', b === el)); loadAdminList(); },
   closeModal: () => closeModal(),
+  viewMember: (el) => openMember(el.dataset.id),
+  dirMore: () => { dirShown += DIR_PAGE; renderDirectory(); },
 
   accept: async (el) => {
     const id = el.dataset.id;

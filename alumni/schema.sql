@@ -292,6 +292,78 @@ create policy avatars_delete on storage.objects
   for delete to authenticated
   using (bucket_id = 'avatars' and (storage.foldername(name))[1] = (select auth.uid())::text);
 
+-- ---------------------------------------------------------------------
+-- 6. Annuaire des alumni (étape 2)
+--    Le serveur applique les choix de visibilité de chacun : un champ
+--    masqué n'est JAMAIS envoyé aux autres membres.
+--    Seuls les alumni validés sont listés (les lycéens mineurs ne le sont pas).
+-- ---------------------------------------------------------------------
+-- Vrai si la personne connectée est un membre validé.
+create or replace function public.is_member()
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and status = 'approved'
+  );
+$$;
+
+create or replace function public.directory_list()
+returns table (
+  id uuid, first_name text, last_name text, graduation_year int,
+  country text, city text, school text, program text,
+  linkedin text, instagram text, photo_path text,
+  contact_email boolean, contact_message boolean, contact_chat boolean,
+  email text
+)
+language sql stable security definer
+set search_path = public
+as $$
+  select
+    p.id, p.first_name, p.last_name, p.graduation_year,
+    case when p.show_location then p.country end,
+    case when p.show_location then p.city end,
+    case when p.show_study    then p.school end,
+    case when p.show_study    then p.program end,
+    case when p.show_social   then p.linkedin end,
+    case when p.show_social   then p.instagram end,
+    case when p.show_photo    then p.photo_path end,
+    p.contact_email, p.contact_message, p.contact_chat,
+    case when p.contact_email then p.email end   -- e-mail partagé seulement si la personne accepte ce contact
+  from public.profiles p
+  where public.is_member()
+    and p.status = 'approved'
+    and p.member_type = 'alumni'
+  order by lower(p.last_name), lower(p.first_name)
+  limit 5000;
+$$;
+
+revoke all on function public.directory_list() from public, anon;
+grant execute on function public.directory_list() to authenticated;
+
+-- Une photo n'est lisible par les autres membres que si son propriétaire
+-- est un alumni validé qui a choisi de l'afficher.
+create or replace function public.can_view_photo(path text)
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select public.is_member() and exists (
+    select 1 from public.profiles p
+    where p.photo_path = path
+      and p.status = 'approved'
+      and p.member_type = 'alumni'
+      and p.show_photo
+  );
+$$;
+
+drop policy if exists avatars_select_members on storage.objects;
+create policy avatars_select_members on storage.objects
+  for select to authenticated
+  using (bucket_id = 'avatars' and public.can_view_photo(name));
+
 -- =====================================================================
 --  FIN. Pour vous nommer administrateur (APRÈS vous être inscrit sur
 --  l'application), exécutez cette requête en remplaçant l'adresse :

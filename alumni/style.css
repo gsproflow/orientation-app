@@ -230,3 +230,29 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
 .req-card { min-width: 0; }
 .req-top > div:last-child { min-width: 0; }
 .req-top h3, .hero h1, .state h1 { overflow-wrap: anywhere; }
+
+/* ---------- Annuaire ---------- */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.row.center { justify-content: center; }
+.filters { padding-bottom: 6px; }
+.member { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.member h3 { font-size: 1.05rem; overflow-wrap: anywhere; }
+.member .sub { font-size: .85rem; color: var(--muted); }
+.member .m-study { font-weight: 600; font-size: .94rem; overflow-wrap: anywhere; }
+.member .m-place { font-size: .9rem; color: var(--muted); }
+.member .btn { justify-self: start; margin-top: 4px; }
+.avatar.md { width: 64px; height: 64px; font-size: 1.2rem; }
+.tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.tag { display: inline-block; background: var(--blue-soft); color: var(--blue); border-radius: 99px; padding: .1rem .6rem; font-size: .78rem; font-weight: 600; }
+.tag.me { background: var(--gold-soft); color: #9a5b00; }
+.member-head { display: flex; gap: 1rem; align-items: center; }
+@media (min-width: 560px) { .cards { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 900px) { #dirList.cards { grid-template-columns: 1fr 1fr 1fr; } }
+
+/* Téléphone : l'en-tête défile avec la page et prend moins de place */
+@media (max-width: 719px) {
+  .topbar { position: static; }
+  .topbar-in { padding: .4rem 12px; row-gap: .1rem; }
+  .nav { gap: 0; margin-left: -.55rem; }
+  .nav a, .nav .linkbtn { padding: .35rem .55rem; font-size: .88rem; min-height: 38px; }
+}
