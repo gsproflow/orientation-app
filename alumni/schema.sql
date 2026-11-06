@@ -636,6 +636,243 @@ begin
   end loop;
 end $$;
 
+-- ---------------------------------------------------------------------
+-- 8. Actualités et agenda des événements (étape 5)
+--    Publiés par l'administration ; visibles selon le public visé.
+-- ---------------------------------------------------------------------
+alter table public.profiles add column if not exists content_seen_at timestamptz;
+
+create table if not exists public.news (
+  id          uuid primary key default gen_random_uuid(),
+  title       text not null check (char_length(title) between 3 and 140),
+  body        text not null check (char_length(body) between 1 and 5000),
+  image_path  text check (char_length(image_path) <= 200),
+  audience    text not null default 'all' check (audience in ('all','alumni','student')),
+  pinned      boolean not null default false,
+  created_by  uuid default auth.uid() references public.profiles(id) on delete set null,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists news_created_idx on public.news (created_at desc);
+
+create table if not exists public.events (
+  id           uuid primary key default gen_random_uuid(),
+  title        text not null check (char_length(title) between 3 and 140),
+  description  text check (char_length(description) <= 5000),
+  location     text check (char_length(location) <= 200),
+  starts_at    timestamptz not null,
+  ends_at      timestamptz,
+  capacity     int check (capacity between 1 and 10000),
+  registration boolean not null default true,
+  audience     text not null default 'all' check (audience in ('all','alumni','student')),
+  image_path   text check (char_length(image_path) <= 200),
+  created_by   uuid default auth.uid() references public.profiles(id) on delete set null,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  check (ends_at is null or ends_at >= starts_at)
+);
+create index if not exists events_start_idx on public.events (starts_at);
+
+create table if not exists public.event_registrations (
+  event_id    uuid not null references public.events(id) on delete cascade,
+  user_id     uuid not null references public.profiles(id) on delete cascade,
+  created_at  timestamptz not null default now(),
+  primary key (event_id, user_id)
+);
+
+-- Le membre connecté fait-il partie du public visé ? (le personnel voit tout)
+create or replace function public.audience_ok(a text)
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select public.is_member() and (
+    a = 'all'
+    or public.is_admin()
+    or exists (
+      select 1 from public.profiles p
+      where p.id = auth.uid()
+        and (p.member_type = 'staff'
+             or (a = 'alumni'  and p.member_type = 'alumni')
+             or (a = 'student' and p.member_type = 'student'))
+    )
+  );
+$$;
+
+-- Événements visibles, avec le nombre d'inscrits et mon inscription.
+create or replace function public.events_list()
+returns table (
+  id uuid, title text, description text, location text,
+  starts_at timestamptz, ends_at timestamptz, capacity int, registration boolean,
+  audience text, image_path text, created_at timestamptz,
+  registered bigint, mine boolean
+)
+language sql stable security definer
+set search_path = public
+as $$
+  select
+    e.id, e.title, e.description, e.location, e.starts_at, e.ends_at, e.capacity,
+    e.registration, e.audience, e.image_path, e.created_at,
+    (select count(*) from public.event_registrations r where r.event_id = e.id),
+    exists (select 1 from public.event_registrations r
+            where r.event_id = e.id and r.user_id = auth.uid())
+  from public.events e
+  where public.audience_ok(e.audience)
+  order by e.starts_at;
+$$;
+
+-- S'inscrire (verrouille l'événement pour ne jamais dépasser le nombre de places).
+create or replace function public.register_event(eid uuid)
+returns bigint
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  e public.events;
+  n bigint;
+begin
+  if not public.is_member() then
+    raise exception 'Accès réservé aux membres validés';
+  end if;
+  select * into e from public.events where id = eid for update;
+  if not found or not public.audience_ok(e.audience) then
+    raise exception 'Événement introuvable';
+  end if;
+  if not e.registration then
+    raise exception 'Cet événement ne nécessite pas d''inscription';
+  end if;
+  if coalesce(e.ends_at, e.starts_at + interval '3 hours') < now() then
+    raise exception 'Cet événement est terminé';
+  end if;
+  select count(*) into n from public.event_registrations where event_id = eid;
+  if exists (select 1 from public.event_registrations where event_id = eid and user_id = auth.uid()) then
+    return n;
+  end if;
+  if e.capacity is not null and n >= e.capacity then
+    raise exception 'Cet événement est complet';
+  end if;
+  insert into public.event_registrations (event_id, user_id) values (eid, auth.uid());
+  return n + 1;
+end;
+$$;
+
+create or replace function public.unregister_event(eid uuid)
+returns void
+language plpgsql security definer
+set search_path = public
+as $$
+begin
+  delete from public.event_registrations where event_id = eid and user_id = auth.uid();
+end;
+$$;
+
+-- Nouveautés non vues (publiées depuis la dernière visite, ou depuis la validation du compte).
+create or replace function public.content_unseen()
+returns bigint
+language sql stable security definer
+set search_path = public
+as $$
+  with me as (
+    select coalesce(content_seen_at, reviewed_at, created_at) as since
+    from public.profiles where id = auth.uid()
+  )
+  select
+    (select count(*) from public.news n, me
+      where public.audience_ok(n.audience) and n.created_at > me.since
+        and n.created_by is distinct from auth.uid())
+    + (select count(*) from public.events e, me
+      where public.audience_ok(e.audience) and e.created_at > me.since
+        and e.created_by is distinct from auth.uid());
+$$;
+
+create or replace function public.mark_content_seen()
+returns void
+language sql security definer
+set search_path = public
+as $$
+  update public.profiles set content_seen_at = now() where id = auth.uid();
+$$;
+
+revoke all on function public.events_list(), public.register_event(uuid),
+  public.unregister_event(uuid), public.content_unseen(), public.mark_content_seen()
+  from public, anon;
+grant execute on function public.events_list(), public.register_event(uuid),
+  public.unregister_event(uuid), public.content_unseen(), public.mark_content_seen()
+  to authenticated;
+
+-- Règles de sécurité
+alter table public.news                enable row level security;
+alter table public.events              enable row level security;
+alter table public.event_registrations enable row level security;
+
+drop policy if exists news_select on public.news;
+create policy news_select on public.news
+  for select to authenticated using (public.audience_ok(audience));
+drop policy if exists news_insert on public.news;
+create policy news_insert on public.news
+  for insert to authenticated with check (public.is_admin());
+drop policy if exists news_update on public.news;
+create policy news_update on public.news
+  for update to authenticated using (public.is_admin()) with check (public.is_admin());
+drop policy if exists news_delete on public.news;
+create policy news_delete on public.news
+  for delete to authenticated using (public.is_admin());
+
+drop policy if exists events_select on public.events;
+create policy events_select on public.events
+  for select to authenticated using (public.audience_ok(audience));
+drop policy if exists events_insert on public.events;
+create policy events_insert on public.events
+  for insert to authenticated with check (public.is_admin());
+drop policy if exists events_update on public.events;
+create policy events_update on public.events
+  for update to authenticated using (public.is_admin()) with check (public.is_admin());
+drop policy if exists events_delete on public.events;
+create policy events_delete on public.events
+  for delete to authenticated using (public.is_admin());
+
+-- Inscriptions : chacun voit les siennes, l'administration voit tout.
+-- (S'inscrire et se désinscrire passe par les fonctions ci-dessus.)
+drop policy if exists registrations_select on public.event_registrations;
+create policy registrations_select on public.event_registrations
+  for select to authenticated using (user_id = (select auth.uid()) or public.is_admin());
+
+-- Images de couverture : visibles par les membres, ajoutées par l'administration.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('content', 'content', false, 3145728, array['image/jpeg','image/png','image/webp'])
+on conflict (id) do update
+  set file_size_limit = excluded.file_size_limit,
+      allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists content_select on storage.objects;
+create policy content_select on storage.objects
+  for select to authenticated using (bucket_id = 'content' and public.is_member());
+drop policy if exists content_insert on storage.objects;
+create policy content_insert on storage.objects
+  for insert to authenticated with check (bucket_id = 'content' and public.is_admin());
+drop policy if exists content_update on storage.objects;
+create policy content_update on storage.objects
+  for update to authenticated
+  using (bucket_id = 'content' and public.is_admin())
+  with check (bucket_id = 'content' and public.is_admin());
+drop policy if exists content_delete on storage.objects;
+create policy content_delete on storage.objects
+  for delete to authenticated using (bucket_id = 'content' and public.is_admin());
+
+-- Mises à jour en direct des nouvelles publications.
+do $$
+declare t text;
+begin
+  foreach t in array array['news', 'events'] loop
+    begin
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    exception
+      when duplicate_object then null;
+      when undefined_object then null;
+    end;
+  end loop;
+end $$;
+
 -- =====================================================================
 --  FIN. Pour vous nommer administrateur (APRÈS vous être inscrit sur
 --  l'application), exécutez cette requête en remplaçant l'adresse :

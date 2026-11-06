@@ -147,27 +147,29 @@ function shell(inner, { wide = false } = {}) {
   const isAdmin = approved && profile.role === 'admin';
   const h = location.hash || '#/';
   const act = (r) => (h === r || (r !== '#/' && h.startsWith(r + '/')) ? 'active' : '');
-  const msgB = (id) => `<span ${id ? 'id="navMsgBadge" ' : ''}class="badge js-msg-badge" hidden></span>`;
-  const admB = (id) => `<span ${id ? 'id="navBadge" ' : ''}class="badge js-admin-badge" hidden></span>`;
+  const badge = (cls, id) => `<span ${id ? `id="${id}" ` : ''}class="badge ${cls}" hidden></span>`;
   const nav = session
     ? `<nav class="nav" aria-label="Menu">
         ${approved ? `<a class="dlink ${act('#/')}" href="#/">Accueil</a>
           <a class="dlink ${act('#/annuaire')}" href="#/annuaire">Annuaire</a>
           <a class="dlink ${act('#/carte')}" href="#/carte">Carte</a>
-          <a class="dlink ${act('#/messages')}" href="#/messages">Messages ${msgB(true)}</a>` : ''}
-        ${isAdmin ? `<a class="dlink ${act('#/admin')}" href="#/admin">Administration ${admB(true)}</a>` : ''}
+          <a class="dlink ${act('#/actus')}" href="#/actus">Actualités ${badge('js-content-badge')}</a>
+          <a class="dlink ${act('#/agenda')}" href="#/agenda">Agenda</a>
+          <a class="dlink ${act('#/messages')}" href="#/messages">Messages ${badge('js-msg-badge', 'navMsgBadge')}</a>` : ''}
+        ${isAdmin ? `<a class="dlink ${act('#/admin')}" href="#/admin">Administration ${badge('js-admin-badge', 'navBadge')}</a>
+          <a class="mlink ${act('#/admin')}" href="#/admin">⚙ Admin ${badge('js-admin-badge')}</a>` : ''}
         ${approved ? `<a class="dlink ${act('#/profil')}" href="#/profil">Mon profil</a>` : ''}
         <button class="linkbtn ${approved ? 'dlink' : ''}" data-action="privacy">Vie privée</button>
         <button class="linkbtn" data-action="logout">Déconnexion</button>
       </nav>`
     : `<nav class="nav"><button class="linkbtn" data-action="privacy">Vie privée</button></nav>`;
-  const tab = (href, icon, label, badge = '') =>
-    `<a class="tab ${act(href)}" href="${href}"><span class="ti" aria-hidden="true">${icon}</span><span>${label}</span>${badge}</a>`;
+  const tab = (href, icon, label, extra = '', on = null) =>
+    `<a class="tab ${on === null ? act(href) : (on ? 'active' : '')}" href="${href}"><span class="ti" aria-hidden="true">${icon}</span><span>${label}</span>${extra}</a>`;
   const tabbar = approved
     ? `<nav class="tabbar" aria-label="Navigation principale">
         ${tab('#/', '🏠', 'Accueil')}${tab('#/annuaire', '👥', 'Annuaire')}${tab('#/carte', '🗺️', 'Carte')}
-        ${tab('#/messages', '💬', 'Messages', msgB(false))}
-        ${isAdmin ? tab('#/admin', '⚙️', 'Admin', admB(false)) : ''}${tab('#/profil', '👤', 'Profil')}
+        ${tab('#/actus', '📰', 'Actus', badge('js-content-badge'), h === '#/actus' || h === '#/agenda')}
+        ${tab('#/messages', '💬', 'Messages', badge('js-msg-badge'))}${tab('#/profil', '👤', 'Profil')}
       </nav>` : '';
   document.body.classList.toggle('has-tabbar', approved);
   app.innerHTML = `
@@ -182,6 +184,7 @@ function shell(inner, { wide = false } = {}) {
   window.scrollTo(0, 0);
   setUnread(unread);
   setAdminBadge(adminBadgeN);
+  setContentBadge(contentNew);
 }
 
 /* ------------------------------------------------------------------ */
@@ -236,6 +239,8 @@ function route() {
   if (h.startsWith('#/messages')) return viewMessages(h.split('/')[2]);
   if (h === '#/annuaire') return viewDirectory();
   if (h === '#/carte') return viewMap();
+  if (h === '#/actus') return viewFeed('news');
+  if (h === '#/agenda') return viewFeed('events');
   if (h === '#/admin' && profile.role === 'admin') return viewAdmin();
   return viewHome();
 }
@@ -782,7 +787,6 @@ async function viewHome() {
   currentView = 'home';
   const isAdmin = profile.role === 'admin';
   shell(`
-    <div id="homeUnread"></div>
     <section class="card hero accent">
       <div id="homeAvatar">${avatarHtml(profile, null, 'lg')}</div>
       <div>
@@ -791,12 +795,14 @@ async function viewHome() {
         <p class="muted">${esc(TYPE_LABEL[profile.member_type])}${profile.graduation_year ? ' · Promotion ' + esc(profile.graduation_year) : ''}${profile.class_level ? ' · ' + esc(profile.class_level) : ''}</p>
       </div>
     </section>
+    <div id="homeUnread"></div>
+    <div id="homeFeed"></div>
     <section class="card">
       <h2>Votre profil est validé</h2>
       <p>Merci d’avoir rejoint la communauté du GSJC. Trouvez un ancien élève dans l’annuaire ou sur la carte du monde, puis écrivez-lui directement. Arrivent bientôt :</p>
       <ul class="soon" style="margin-top:10px">
-        <li>Les événements et les actualités de l’établissement</li>
         <li>Les offres de stage et d’emploi</li>
+        <li>Des statistiques sur le devenir des élèves</li>
       </ul>
     </section>
     <div class="row">
@@ -806,6 +812,7 @@ async function viewHome() {
       ${isAdmin ? '<a class="btn ghost" href="#/admin">Ouvrir l’administration</a>' : ''}
     </div>`);
   photoUrl(profile.photo_path).then((u) => { if (u) $('#homeAvatar') && ($('#homeAvatar').innerHTML = avatarHtml(profile, u, 'lg')); });
+  loadHomeFeed();
   if (isAdmin) refreshBadge();
 }
 
@@ -972,7 +979,9 @@ function startLive() {
   try {
     live = sb.channel('live-' + profile.id)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, onChatMessage)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'admin_messages' }, onAdminMessage);
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'admin_messages' }, onAdminMessage)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'news' }, (p) => onContent('news', p.new))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'events' }, (p) => onContent('events', p.new));
     if (isAdmin) {
       live.on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, onProfileEvent)
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reports' }, onReportEvent);
@@ -980,6 +989,7 @@ function startLive() {
     live.subscribe();
   } catch { live = null; }
   refreshUnread();
+  refreshContentBadge();
   if (isAdmin) refreshBadge();
 }
 
@@ -988,13 +998,16 @@ function stopLive() {
   convOpen = null;
   setUnread(0);
   setAdminBadge(0);
+  setContentBadge(0);
 }
 
 // Secours si le temps réel est bloqué (réseau d'entreprise, par exemple).
 async function pollLive() {
   if (!session || profile?.status !== 'approved' || document.hidden) return;
   refreshUnread();
+  refreshContentBadge();
   if (profile.role === 'admin') refreshBadge();
+  if (currentView === 'feed' && !$('.modal')) loadFeed();
   if (currentView === 'messages') loadConversationList();
   if (currentView === 'conversation' && convOpen) fetchNewMessages();
 }
@@ -1441,6 +1454,416 @@ async function checkPositions() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Actualités et agenda                                                */
+/* ------------------------------------------------------------------ */
+let feedKind = 'news';
+let feedNews = [];
+let feedEvents = [];
+let contentNew = 0;
+let regCache = new Map();
+const contentUrlCache = new Map();
+const AUDIENCE = { all: 'Tous les membres', alumni: 'Alumni uniquement', student: 'Lycéens uniquement' };
+
+function setContentBadge(n) {
+  contentNew = Number(n) || 0;
+  $$('.js-content-badge').forEach((b) => { b.textContent = contentNew; b.hidden = contentNew === 0; });
+}
+async function refreshContentBadge() {
+  if (!session || profile?.status !== 'approved') return;
+  const { data } = await sb.rpc('content_unseen');
+  setContentBadge(data);
+}
+function markContentSeen() { sb.rpc('mark_content_seen').then(() => setContentBadge(0)); }
+
+function onContent(kind, row) {
+  if (!row || row.created_by === profile.id) return;
+  refreshContentBadge();
+  if (currentView === 'feed' && !$('.modal')) loadFeed();
+  if (currentView === 'home') loadHomeFeed();
+  notifyUser(kind === 'news' ? 'Nouvelle actualité' : 'Nouvel événement', row.title);
+}
+
+async function contentUrls(paths) {
+  const need = [...new Set(paths.filter((p) => p && !(contentUrlCache.get(p)?.exp > Date.now())))];
+  if (need.length) {
+    const { data } = await sb.storage.from('content').createSignedUrls(need, 3600);
+    (data || []).forEach((d) => { if (d.signedUrl) contentUrlCache.set(d.path, { url: d.signedUrl, exp: Date.now() + 3300 * 1000 }); });
+  }
+}
+const contentUrl = (p) => contentUrlCache.get(p)?.url || null;
+
+const eventEnd = (e) => new Date(e.ends_at || new Date(e.starts_at).getTime() + 3 * 3600 * 1000);
+const isUpcoming = (e) => eventEnd(e) >= new Date();
+const fmtLong = (d) => new Date(d).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+const fmtHour = (d) => new Date(d).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+const withBreaks = (t) => esc(t).replace(/\n/g, '<br>');
+const eventWhen = (e) => {
+  const same = e.ends_at && new Date(e.ends_at).toDateString() === new Date(e.starts_at).toDateString();
+  return `${fmtLong(e.starts_at)} · ${fmtHour(e.starts_at)}` +
+    (e.ends_at ? (same ? ` – ${fmtHour(e.ends_at)}` : ` → ${fmtLong(e.ends_at)} ${fmtHour(e.ends_at)}`) : '');
+};
+const isFull = (e) => e.capacity != null && Number(e.registered) >= e.capacity;
+
+function viewFeed(kind) {
+  currentView = 'feed';
+  feedKind = kind;
+  const isAdmin = profile.role === 'admin';
+  shell(`
+    <div class="page-head tight"><h1>${kind === 'news' ? 'Actualités' : 'Agenda'}</h1>
+      ${isAdmin ? '<button class="btn sm" data-action="publish">＋ Publier</button>' : ''}</div>
+    <div class="seg seg-links" style="max-width:420px">
+      <a href="#/actus" aria-current="${kind === 'news'}">Actualités</a>
+      <a href="#/agenda" aria-current="${kind === 'events'}">Agenda</a>
+    </div>
+    <div id="feedList" class="feed"><p class="muted">Chargement…</p></div>`);
+  loadFeed().then(markContentSeen);
+}
+
+async function loadFeed() {
+  const kind = feedKind;
+  let error = null;
+  if (kind === 'news') {
+    const r = await sb.from('news').select('*').order('pinned', { ascending: false }).order('created_at', { ascending: false }).limit(100);
+    error = r.error; feedNews = r.data || [];
+    if (!error) await contentUrls(feedNews.map((n) => n.image_path));
+  } else {
+    const r = await sb.rpc('events_list');
+    error = r.error; feedEvents = r.data || [];
+    if (!error) await contentUrls(feedEvents.map((e) => e.image_path));
+  }
+  const box = $('#feedList');
+  if (!box || currentView !== 'feed' || feedKind !== kind) return;
+  if (error) { box.innerHTML = `<p class="err">${esc(errMsg(error))}</p>`; return; }
+  box.innerHTML = kind === 'news' ? renderNewsList() : renderEventList();
+}
+
+const adminBtns = (kind, id) => profile.role === 'admin'
+  ? `<button class="btn ghost sm" data-action="editItem" data-kind="${kind}" data-id="${esc(id)}">Modifier</button>
+     <button class="btn danger-ghost sm" data-action="deleteItem" data-kind="${kind}" data-id="${esc(id)}">Supprimer</button>` : '';
+const audTag = (a) => (a !== 'all' ? `<span class="tag">${a === 'alumni' ? '🎓 Alumni' : '🎒 Lycéens'}</span>` : '');
+
+function renderNewsList() {
+  if (!feedNews.length) return '<div class="empty">Aucune actualité pour le moment.</div>';
+  return feedNews.map((n) => {
+    const url = contentUrl(n.image_path);
+    const text = n.body.length > 220 ? n.body.slice(0, 220).trim() + '…' : n.body;
+    return `<article class="post ${n.pinned ? 'pinned' : ''}">
+      ${url ? `<img class="post-img" src="${esc(url)}" alt="" loading="lazy">` : ''}
+      <div class="post-body">
+        <div class="tags">${n.pinned ? '<span class="tag me">📌 À la une</span>' : ''}${audTag(n.audience)}</div>
+        <h3>${esc(n.title)}</h3>
+        <p class="small muted">${fmtDate(n.created_at)}</p>
+        <p>${esc(text)}</p>
+        <div class="row"><button class="btn ghost sm" data-action="openNews" data-id="${esc(n.id)}">Lire la suite</button>${adminBtns('news', n.id)}</div>
+      </div></article>`;
+  }).join('');
+}
+
+function eventCard(e) {
+  const d = new Date(e.starts_at);
+  const full = isFull(e);
+  const quick = !e.registration ? '' : e.mine
+    ? `<span class="tag ok">✓ Inscrit</span>`
+    : (!isUpcoming(e) ? '' : full ? '<span class="tag no">Complet</span>'
+      : `<button class="btn sm" data-action="eventReg" data-id="${esc(e.id)}">S’inscrire</button>`);
+  const count = e.registration ? `<span class="small muted">👥 ${e.registered} inscrit${e.registered > 1 ? 's' : ''}${e.capacity ? ` / ${e.capacity} place${e.capacity > 1 ? 's' : ''}` : ''}</span>` : '<span class="small muted">Entrée libre</span>';
+  return `<article class="evt">
+    <div class="date-badge" aria-hidden="true"><b>${d.getDate()}</b><span>${d.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '')}</span></div>
+    <div class="evt-body">
+      <div class="tags">${audTag(e.audience)}</div>
+      <h3>${esc(e.title)}</h3>
+      <p class="small muted">${fmtHour(e.starts_at)}${e.location ? ' · ' + esc(e.location) : ''}</p>
+      <div class="evt-foot">${count}</div>
+      <div class="row"><button class="btn ghost sm" data-action="openEvent" data-id="${esc(e.id)}">Détails</button>${quick}</div>
+    </div></article>`;
+}
+
+function renderEventList() {
+  const up = feedEvents.filter(isUpcoming).sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at));
+  const past = feedEvents.filter((e) => !isUpcoming(e)).sort((a, b) => new Date(b.starts_at) - new Date(a.starts_at));
+  return (up.length ? up.map(eventCard).join('') : '<div class="empty">Aucun événement à venir pour le moment.</div>') +
+    (past.length ? `<details class="past"><summary>Événements passés (${past.length})</summary>${past.map(eventCard).join('')}</details>` : '');
+}
+
+async function openNews(id) {
+  const n = feedNews.find((x) => String(x.id) === String(id));
+  if (!n) return;
+  await contentUrls([n.image_path]);
+  const url = contentUrl(n.image_path);
+  openModal(`
+    ${url ? `<img class="post-img big" src="${esc(url)}" alt="">` : ''}
+    <div class="tags">${n.pinned ? '<span class="tag me">📌 À la une</span>' : ''}${audTag(n.audience)}</div>
+    <h2 style="margin-top:6px">${esc(n.title)}</h2>
+    <p class="small muted">${fmtLong(n.created_at)}</p>
+    <p style="margin-top:10px">${withBreaks(n.body)}</p>
+    <div class="row end" style="margin-top:16px">${adminBtns('news', n.id)}<button class="btn" data-action="closeModal">Fermer</button></div>`);
+}
+
+async function openEvent(id) {
+  const e = feedEvents.find((x) => String(x.id) === String(id));
+  if (!e) return;
+  await contentUrls([e.image_path]);
+  const url = contentUrl(e.image_path);
+  const full = isFull(e);
+  const left = e.capacity ? Math.max(e.capacity - Number(e.registered), 0) : null;
+  let action = '';
+  if (e.registration) {
+    if (e.mine) action = `<p class="ok-line">✓ Vous êtes inscrit(e).</p><button class="btn ghost" data-action="eventUnreg" data-id="${esc(e.id)}">Se désinscrire</button>`;
+    else if (!isUpcoming(e)) action = '<p class="muted small">Cet événement est terminé.</p>';
+    else if (full) action = '<p class="no-line">Cet événement est complet.</p>';
+    else action = `<button class="btn" data-action="eventReg" data-id="${esc(e.id)}">S’inscrire</button>`;
+  }
+  openModal(`
+    ${url ? `<img class="post-img big" src="${esc(url)}" alt="">` : ''}
+    <div class="tags">${audTag(e.audience)}</div>
+    <h2 style="margin-top:6px">${esc(e.title)}</h2>
+    <dl class="kv" style="margin:10px 0">
+      <dt>Quand</dt><dd>${esc(eventWhen(e))}</dd>
+      ${e.location ? `<dt>Où</dt><dd>${esc(e.location)}</dd>` : ''}
+      <dt>Inscriptions</dt><dd>${e.registration ? `${e.registered} inscrit${e.registered > 1 ? 's' : ''}${left != null ? ` · ${left} place${left > 1 ? 's' : ''} restante${left > 1 ? 's' : ''}` : ''}` : 'Entrée libre, sans inscription'}</dd>
+    </dl>
+    ${e.description ? `<p>${withBreaks(e.description)}</p>` : ''}
+    <div class="row" style="margin-top:14px">${action}
+      <button class="btn ghost" data-action="addToCalendar" data-id="${esc(e.id)}">📅 Ajouter à mon agenda</button></div>
+    ${profile.role === 'admin' ? `<div class="row" style="margin-top:12px">
+      ${e.registration ? `<button class="btn ghost sm" data-action="eventRegistrants" data-id="${esc(e.id)}">👥 Voir les inscrits</button>` : ''}${adminBtns('events', e.id)}</div>` : ''}
+    <div class="row end" style="margin-top:14px"><button class="btn" data-action="closeModal">Fermer</button></div>`);
+}
+
+async function toggleRegistration(id, join, el) {
+  if (el) el.disabled = true;
+  const { error } = await sb.rpc(join ? 'register_event' : 'unregister_event', { eid: id });
+  if (error) { if (el) el.disabled = false; toast(errMsg(error), 'err'); await refreshEvents(); return; }
+  toast(join ? 'Inscription confirmée. Ajoutez-la à votre agenda depuis les détails.' : 'Inscription annulée.');
+  const open = !!$('.modal');
+  await refreshEvents();
+  if (open) openEvent(id);
+}
+
+async function refreshEvents() {
+  const { data } = await sb.rpc('events_list');
+  feedEvents = data || feedEvents;
+  if (currentView === 'feed' && feedKind === 'events' && $('#feedList')) $('#feedList').innerHTML = renderEventList();
+  if (currentView === 'home') loadHomeFeed();
+}
+
+async function loadHomeFeed() {
+  const [ev, nw] = await Promise.all([
+    sb.rpc('events_list'),
+    sb.from('news').select('*').order('pinned', { ascending: false }).order('created_at', { ascending: false }).limit(2),
+  ]);
+  const box = $('#homeFeed');
+  if (!box || currentView !== 'home') return;
+  feedEvents = ev.data || [];
+  feedNews = nw.data || [];
+  const up = feedEvents.filter(isUpcoming).sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at)).slice(0, 2);
+  if (!up.length && !feedNews.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<section class="card">
+    ${up.length ? `<h2>À venir</h2>${up.map((e) => {
+      const d = new Date(e.starts_at);
+      return `<button class="mini" data-action="openEvent" data-id="${esc(e.id)}">
+        <span class="date-badge sm" aria-hidden="true"><b>${d.getDate()}</b><span>${d.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '')}</span></span>
+        <span class="mini-t"><b>${esc(e.title)}</b><span class="small muted">${fmtHour(e.starts_at)}${e.location ? ' · ' + esc(e.location) : ''}${e.mine ? ' · ✓ inscrit' : ''}</span></span></button>`;
+    }).join('')}<p style="margin:6px 0 14px"><a href="#/agenda">Tout l’agenda →</a></p>` : ''}
+    ${feedNews.length ? `<h2>Dernières actualités</h2>${feedNews.map((n) =>
+      `<button class="mini" data-action="openNews" data-id="${esc(n.id)}"><span class="mini-ic" aria-hidden="true">📰</span>
+        <span class="mini-t"><b>${esc(n.title)}</b><span class="small muted">${fmtDate(n.created_at)}</span></span></button>`).join('')}
+      <p style="margin:6px 0 0"><a href="#/actus">Toutes les actualités →</a></p>` : ''}
+  </section>`;
+}
+
+/* ----- Agenda personnel (.ics) et liste des inscrits (CSV) ----- */
+function slug(t) { return fold(t).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'evenement'; }
+function download(name, type, content) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const a = document.createElement('a');
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+function downloadIcs(e) {
+  const stamp = (d) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const ics = (t) => String(t || '').replace(/\\/g, '\\\\').replace(/;/g, '\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+  const end = e.ends_at || new Date(new Date(e.starts_at).getTime() + 2 * 3600 * 1000).toISOString();
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//GSJC Rabat//Alumni//FR', 'CALSCALE:GREGORIAN', 'BEGIN:VEVENT',
+    `UID:${e.id}@alumni-gsjc`, `DTSTAMP:${stamp(new Date())}`, `DTSTART:${stamp(e.starts_at)}`, `DTEND:${stamp(end)}`,
+    `SUMMARY:${ics(e.title)}`, e.location ? `LOCATION:${ics(e.location)}` : null, e.description ? `DESCRIPTION:${ics(e.description)}` : null,
+    'END:VEVENT', 'END:VCALENDAR'].filter(Boolean);
+  download(`${slug(e.title)}.ics`, 'text/calendar;charset=utf-8', lines.join('\r\n') + '\r\n');
+}
+async function fetchRegistrants(id) {
+  const { data: regs, error } = await sb.from('event_registrations').select('user_id, created_at').eq('event_id', id).order('created_at', { ascending: true });
+  if (error) throw error;
+  if (!regs.length) return [];
+  const { data: people } = await sb.from('profiles').select('id, first_name, last_name, email, member_type, graduation_year, class_level').in('id', regs.map((r) => r.user_id));
+  return regs.map((r) => ({ ...(people || []).find((p) => p.id === r.user_id), at: r.created_at }));
+}
+async function openRegistrants(id) {
+  const e = feedEvents.find((x) => String(x.id) === String(id));
+  let rows = [];
+  try { rows = await fetchRegistrants(id); } catch (err) { return toast(errMsg(err), 'err'); }
+  regCache.set(String(id), rows);
+  openModal(`
+    <h2>Inscrits · ${esc(e?.title || '')}</h2>
+    <p class="muted small">${rows.length} inscrit${rows.length > 1 ? 's' : ''}${e?.capacity ? ` sur ${e.capacity} places` : ''}</p>
+    ${rows.length ? `<ul class="plain-list">${rows.map((r) => `<li><b>${esc(`${r.first_name || ''} ${r.last_name || ''}`.trim() || r.email)}</b>
+      <span class="small muted">${esc(TYPE_LABEL[r.member_type] || '')}${r.graduation_year ? ' · promo ' + esc(r.graduation_year) : ''}${r.class_level ? ' · ' + esc(r.class_level) : ''} · ${esc(r.email)}</span></li>`).join('')}</ul>` : '<p class="empty">Aucun inscrit pour le moment.</p>'}
+    <div class="row end" style="margin-top:14px">
+      ${rows.length ? `<button class="btn ghost" data-action="exportRegistrants" data-id="${esc(id)}">⬇ Exporter (Excel)</button>` : ''}
+      <button class="btn" data-action="closeModal">Fermer</button></div>`);
+}
+function exportRegistrants(id) {
+  const e = feedEvents.find((x) => String(x.id) === String(id));
+  const rows = regCache.get(String(id)) || [];
+  const cell = (v) => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };
+  const head = ['Nom', 'Prénom', 'Type', 'Promotion / classe', 'E-mail', 'Inscrit le'];
+  const lines = [head, ...rows.map((r) => [r.last_name, r.first_name, TYPE_LABEL[r.member_type] || '', r.graduation_year || r.class_level || '', r.email, new Date(r.at).toLocaleString('fr-FR')])];
+  download(`inscrits-${slug(e?.title)}.csv`, 'text/csv;charset=utf-8', '\ufeff' + lines.map((l) => l.map(cell).join(';')).join('\r\n'));
+}
+
+/* ----- Publication (administration) ----- */
+const toLocalInput = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso); const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+async function resizedJpeg(file, maxW) {
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file));
+  const k = Math.min(1, maxW / bmp.width);
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.82));
+  if (!blob) throw new Error('image');
+  return blob;
+}
+
+async function openPublish(kind, item) {
+  const editing = !!item;
+  kind = kind || 'news';
+  if (editing) await contentUrls([item.image_path]);
+  const curUrl = editing ? contentUrl(item.image_path) : null;
+  const v = (k) => esc(item?.[k] ?? '');
+  const box = openModal(`
+    <h2>${editing ? 'Modifier' : 'Publier'}</h2>
+    <form id="pubForm" novalidate>
+      ${editing ? '' : `<div class="choices" style="grid-template-columns:1fr 1fr;margin-bottom:12px">
+        <label class="choice"><input type="radio" name="pubType" value="news" ${kind === 'news' ? 'checked' : ''}><span>📰 Actualité</span></label>
+        <label class="choice"><input type="radio" name="pubType" value="events" ${kind === 'events' ? 'checked' : ''}><span>📅 Événement</span></label></div>`}
+      <div class="field" data-field="title"><label for="pTitle">Titre <span class="req">*</span></label>
+        <input id="pTitle" type="text" maxlength="140" value="${v('title')}"><p class="err" data-err="title"></p></div>
+      <div class="field" data-field="body"><label for="pBody"><span data-for="news">Texte</span><span data-for="events">Description</span> <span class="req" data-for="news">*</span></label>
+        <textarea id="pBody" rows="5" maxlength="5000">${esc(item?.body ?? item?.description ?? '')}</textarea><p class="err" data-err="body"></p></div>
+      <div data-for="events">
+        <div class="grid2">
+          <div class="field" data-field="starts"><label for="pStart">Début <span class="req">*</span></label><input id="pStart" type="datetime-local" value="${toLocalInput(item?.starts_at)}"><p class="err" data-err="starts"></p></div>
+          <div class="field" data-field="ends"><label for="pEnd">Fin <span class="hint">(facultatif)</span></label><input id="pEnd" type="datetime-local" value="${toLocalInput(item?.ends_at)}"><p class="err" data-err="ends"></p></div>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="pLoc">Lieu</label><input id="pLoc" type="text" maxlength="200" value="${v('location')}"></div>
+          <div class="field" data-field="cap"><label for="pCap">Nombre de places <span class="hint">(vide = illimité)</span></label><input id="pCap" type="number" min="1" max="10000" value="${v('capacity')}"><p class="err" data-err="cap"></p></div>
+        </div>
+        <label class="switch"><input type="checkbox" id="pReg" ${item ? (item.registration ? 'checked' : '') : 'checked'}><span class="track"></span><span>Inscription en ligne</span></label>
+      </div>
+      <div class="field"><label for="pAud">Public concerné</label>
+        <select id="pAud">${Object.entries(AUDIENCE).map(([k, l]) => `<option value="${k}" ${(item?.audience || 'all') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <label class="switch" data-for="news"><input type="checkbox" id="pPin" ${item?.pinned ? 'checked' : ''}><span class="track"></span><span>📌 Épingler en haut</span></label>
+      <div class="field"><span class="lbl-t">Image de couverture <span class="hint">(facultatif)</span></span>
+        <div id="pImgPrev">${curUrl ? `<img class="post-img" src="${esc(curUrl)}" alt="">` : ''}</div>
+        <input type="file" id="pImg" accept="image/jpeg,image/png,image/webp,image/*" hidden>
+        <div class="row" style="margin-top:6px"><button type="button" class="btn ghost sm" id="pImgBtn">Choisir une image</button>
+          ${curUrl ? '<label class="check small"><input type="checkbox" id="pImgDel"><span>Retirer l’image actuelle</span></label>' : ''}</div></div>
+      <div class="row end" style="margin-top:14px"><button type="button" class="btn ghost" data-action="closeModal">Annuler</button>
+        <button type="submit" class="btn" id="pSave">${editing ? 'Enregistrer' : 'Publier'}</button></div>
+    </form>`);
+  const form = $('#pubForm', box);
+  let blob = null;
+  const kindNow = () => (editing ? kind : $('input[name=pubType]:checked', form).value);
+  const apply = () => { const k = kindNow(); $$('[data-for]', form).forEach((n) => (n.hidden = n.dataset.for !== k)); };
+  $$('input[name=pubType]', form).forEach((r) => r.addEventListener('change', apply));
+  apply();
+  $('#pImgBtn', form).addEventListener('click', () => $('#pImg', form).click());
+  $('#pImg', form).addEventListener('change', async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try { blob = await resizedJpeg(f, 1280); $('#pImgPrev', form).innerHTML = `<img class="post-img" src="${URL.createObjectURL(blob)}" alt="Aperçu">`; }
+    catch { toast('Cette image n’a pas pu être lue.', 'err'); }
+  });
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const k = kindNow();
+    $$('[data-err]', form).forEach((n) => (n.textContent = ''));
+    $$('.field.invalid', form).forEach((n) => n.classList.remove('invalid'));
+    const errs = [];
+    const title = $('#pTitle', form).value.trim();
+    const body = $('#pBody', form).value.trim();
+    if (title.length < 3) errs.push(['title', 'Indiquez un titre (3 caractères minimum).']);
+    if (k === 'news' && !body) errs.push(['body', 'Le texte est obligatoire.']);
+    const sv = $('#pStart', form).value, ev2 = $('#pEnd', form).value, capv = $('#pCap', form).value;
+    if (k === 'events') {
+      if (!sv) errs.push(['starts', 'Indiquez la date et l’heure de début.']);
+      if (sv && ev2 && new Date(ev2) < new Date(sv)) errs.push(['ends', 'La fin doit être après le début.']);
+      if (capv && (!(Number(capv) >= 1) || !Number.isInteger(Number(capv)))) errs.push(['cap', 'Nombre de places invalide.']);
+    }
+    if (errs.length) {
+      errs.forEach(([f, m]) => { $(`[data-err="${f}"]`, form).textContent = m; $(`[data-field="${f}"]`, form)?.classList.add('invalid'); });
+      return;
+    }
+    const btn = $('#pSave', form);
+    busy(btn, true, 'Publication…');
+    let newPath = null;
+    try {
+      let image_path = item?.image_path || null;
+      const dropOld = (blob || $('#pImgDel', form)?.checked) ? item?.image_path : null;
+      if ($('#pImgDel', form)?.checked && !blob) image_path = null;
+      if (blob) {
+        newPath = `${crypto.randomUUID()}.jpg`;
+        const { error } = await sb.storage.from('content').upload(newPath, blob, { contentType: 'image/jpeg', upsert: false });
+        if (error) throw error;
+        image_path = newPath;
+      }
+      const common = { title, audience: $('#pAud', form).value, image_path, updated_at: new Date().toISOString() };
+      const payload = k === 'news'
+        ? { ...common, body, pinned: $('#pPin', form).checked }
+        : { ...common, description: body || null, location: $('#pLoc', form).value.trim() || null,
+            starts_at: new Date(sv).toISOString(), ends_at: ev2 ? new Date(ev2).toISOString() : null,
+            capacity: capv ? Number(capv) : null, registration: $('#pReg', form).checked };
+      const table = k === 'news' ? 'news' : 'events';
+      const res = editing ? await sb.from(table).update(payload).eq('id', item.id) : await sb.from(table).insert(payload);
+      if (res.error) throw res.error;
+      if (dropOld) sb.storage.from('content').remove([dropOld]).catch(() => {});
+      closeModal();
+      toast(editing ? 'Modifications enregistrées.' : (k === 'news' ? 'Actualité publiée.' : 'Événement publié.'));
+      if (currentView === 'feed') { if (feedKind !== k) location.hash = k === 'news' ? '#/actus' : '#/agenda'; else loadFeed(); }
+      else if (currentView === 'home') loadHomeFeed();
+    } catch (err) {
+      if (newPath) sb.storage.from('content').remove([newPath]).catch(() => {});
+      busy(btn, false);
+      toast(errMsg(err), 'err');
+    }
+  });
+}
+
+function confirmDelete(kind, id) {
+  const it = (kind === 'news' ? feedNews : feedEvents).find((x) => String(x.id) === String(id));
+  if (!it) return;
+  closeModal();
+  const box = openModal(`
+    <h2>Supprimer « ${esc(it.title)} » ?</h2>
+    <p>${kind === 'events' ? 'Les inscriptions à cet événement seront aussi supprimées. ' : ''}Cette action est définitive.</p>
+    <div class="row end" style="margin-top:14px"><button class="btn ghost" data-action="closeModal">Annuler</button>
+      <button class="btn danger" id="delOk">Oui, supprimer</button></div>`);
+  $('#delOk', box).addEventListener('click', async (e) => {
+    busy(e.target, true, 'Suppression…');
+    const { error } = await sb.from(kind === 'news' ? 'news' : 'events').delete().eq('id', id);
+    if (error) { busy(e.target, false); return toast(errMsg(error), 'err'); }
+    if (it.image_path) sb.storage.from('content').remove([it.image_path]).catch(() => {});
+    closeModal(); toast('Supprimé.');
+    if (currentView === 'feed') loadFeed(); else if (currentView === 'home') loadHomeFeed();
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /* Administration : validation des inscriptions                        */
 /* ------------------------------------------------------------------ */
 const TABS = [['pending', 'En attente'], ['approved', 'Validés'], ['rejected', 'Refusés'], ['reports', 'Signalements']];
@@ -1581,6 +2004,16 @@ const actions = {
   refreshAdmin: () => { loadStats(); loadAdminList(); },
   adminTab: (el) => { adminTab = el.dataset.tab; $$('.tabs button').forEach((b) => b.setAttribute('aria-selected', b === el)); loadAdminList(); },
   closeModal: () => closeModal(),
+  publish: () => openPublish(feedKind),
+  openNews: (el) => openNews(el.dataset.id),
+  openEvent: (el) => openEvent(el.dataset.id),
+  editItem: (el) => { const k = el.dataset.kind; const it = (k === 'news' ? feedNews : feedEvents).find((x) => String(x.id) === el.dataset.id); if (it) { closeModal(); openPublish(k, it); } },
+  deleteItem: (el) => confirmDelete(el.dataset.kind, el.dataset.id),
+  eventReg: (el) => toggleRegistration(el.dataset.id, true, el),
+  eventUnreg: (el) => toggleRegistration(el.dataset.id, false, el),
+  addToCalendar: (el) => { const e = feedEvents.find((x) => String(x.id) === el.dataset.id); if (e) downloadIcs(e); },
+  eventRegistrants: (el) => openRegistrants(el.dataset.id),
+  exportRegistrants: (el) => exportRegistrants(el.dataset.id),
   mapCountry: (el) => focusCountry(el.dataset.c),
   mapAll: () => { if (mapObj && mapPts.length) mapObj.fitBounds(mapPts, { padding: [40, 40], maxZoom: 5 }); },
   geoBackfill: async (el) => {
