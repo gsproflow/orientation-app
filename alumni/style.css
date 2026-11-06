@@ -256,3 +256,33 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
   .nav { gap: 0; margin-left: -.55rem; }
   .nav a, .nav .linkbtn { padding: .35rem .55rem; font-size: .88rem; min-height: 38px; }
 }
+
+/* ---------- Messagerie ---------- */
+.convlist { display: grid; gap: 8px; }
+.conv { display: flex; align-items: center; gap: .8rem; background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px 14px; text-decoration: none; color: var(--text); min-width: 0; }
+.conv:hover { background: var(--blue-soft); }
+.conv.new { border-left: 4px solid var(--gold); }
+.conv-body { flex: 1; min-width: 0; }
+.conv-top { display: flex; justify-content: space-between; gap: .6rem; align-items: baseline; }
+.conv-top b { overflow-wrap: anywhere; }
+.conv-top .small { white-space: nowrap; }
+.conv-prev { color: var(--muted); font-size: .92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv.new .conv-prev { color: var(--text); font-weight: 600; }
+.dot { width: 12px; height: 12px; border-radius: 50%; background: var(--gold); flex: none; }
+.conv-head { display: grid; grid-template-columns: 1fr auto; gap: .6rem; align-items: center; margin-bottom: 12px; }
+.conv-head > a { grid-column: 1; grid-row: 1; justify-self: start; }
+.conv-head > button { grid-column: 2; grid-row: 1; }
+.conv-who { display: flex; align-items: center; gap: .7rem; grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+@media (min-width: 720px) {
+  .conv-head { display: flex; }
+  .conv-who { flex: 1; }
+}
+.conv-who b { overflow-wrap: anywhere; }
+.chat { padding: 14px; }
+.chat-thread { max-height: 58vh; min-height: 28vh; align-content: start; }
+.unread-card { display: block; text-decoration: none; color: var(--text); border-left: 4px solid var(--gold); }
+.unread-card:hover { background: var(--gold-soft); }
+.req-card.report { border-left: 4px solid var(--danger); }
+.quote { background: var(--bg); border-radius: 10px; padding: .6rem .8rem; font-size: .93rem; overflow-wrap: anywhere; }
+details summary { cursor: pointer; font-weight: 600; color: var(--blue); min-height: 40px; display: flex; align-items: center; }
+@media (min-width: 900px) { .stats { grid-template-columns: repeat(5, 1fr); } }

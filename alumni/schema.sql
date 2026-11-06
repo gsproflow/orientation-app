@@ -354,7 +354,7 @@ as $$
     select 1 from public.profiles p
     where p.photo_path = path
       and p.status = 'approved'
-      and p.member_type = 'alumni'
+      and p.member_type in ('alumni', 'staff')
       and p.show_photo
   );
 $$;
@@ -363,6 +363,263 @@ drop policy if exists avatars_select_members on storage.objects;
 create policy avatars_select_members on storage.objects
   for select to authenticated
   using (bucket_id = 'avatars' and public.can_view_photo(name));
+
+-- ---------------------------------------------------------------------
+-- 7. Messagerie entre membres (étape 3)
+--    Conversations privées à deux. L'administration ne peut lire une
+--    conversation que si l'un des participants la signale.
+-- ---------------------------------------------------------------------
+alter table public.profiles add column if not exists admin_thread_read_at timestamptz;
+
+create table if not exists public.conversations (
+  id               uuid primary key default gen_random_uuid(),
+  user_a           uuid not null references public.profiles(id) on delete cascade,
+  user_b           uuid not null references public.profiles(id) on delete cascade,
+  started_by       uuid not null references public.profiles(id) on delete cascade,
+  created_at       timestamptz not null default now(),
+  check (user_a < user_b),
+  unique (user_a, user_b)
+);
+
+create table if not exists public.messages (
+  id               bigint generated always as identity primary key,
+  conversation_id  uuid not null references public.conversations(id) on delete cascade,
+  sender_id        uuid not null default auth.uid() references public.profiles(id) on delete cascade,
+  body             text not null check (char_length(body) between 1 and 2000),
+  created_at       timestamptz not null default now()
+);
+create index if not exists messages_conv_idx on public.messages (conversation_id, created_at);
+
+create table if not exists public.conversation_reads (
+  conversation_id  uuid not null references public.conversations(id) on delete cascade,
+  user_id          uuid not null references public.profiles(id) on delete cascade,
+  last_read_at     timestamptz not null default now(),
+  primary key (conversation_id, user_id)
+);
+
+create table if not exists public.reports (
+  id               bigint generated always as identity primary key,
+  conversation_id  uuid not null references public.conversations(id) on delete cascade,
+  reporter_id      uuid not null default auth.uid() references public.profiles(id) on delete cascade,
+  reason           text not null check (char_length(reason) between 3 and 1000),
+  status           text not null default 'open' check (status in ('open','closed')),
+  created_at       timestamptz not null default now(),
+  handled_by       uuid references public.profiles(id) on delete set null,
+  handled_at       timestamptz
+);
+create index if not exists reports_status_idx on public.reports (status, created_at);
+
+-- Fonctions d'appui (évitent les boucles entre règles de sécurité)
+create or replace function public.is_participant(cid uuid)
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.conversations c
+    where c.id = cid and auth.uid() in (c.user_a, c.user_b)
+  );
+$$;
+
+create or replace function public.is_reported(cid uuid)
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select exists (select 1 from public.reports r where r.conversation_id = cid);
+$$;
+
+-- Démarrer (ou retrouver) une conversation avec un membre.
+create or replace function public.start_conversation(target uuid)
+returns uuid
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  me  uuid := auth.uid();
+  a   uuid;
+  b   uuid;
+  cid uuid;
+  t   public.profiles;
+begin
+  if me is null or not public.is_member() then
+    raise exception 'Accès réservé aux membres validés';
+  end if;
+  if target = me then
+    raise exception 'Vous ne pouvez pas vous écrire à vous-même';
+  end if;
+
+  select * into t from public.profiles where id = target and status = 'approved';
+  if not found then
+    raise exception 'Destinataire introuvable';
+  end if;
+
+  a := least(me, target);
+  b := greatest(me, target);
+
+  -- Une conversation existante reste utilisable, même si les préférences ont changé.
+  select id into cid from public.conversations where user_a = a and user_b = b;
+  if found then
+    return cid;
+  end if;
+
+  if not (public.is_admin()
+          or (t.member_type = 'alumni' and (t.contact_message or t.contact_chat))) then
+    raise exception 'Cette personne n''accepte pas les messages dans l''application';
+  end if;
+
+  if (select count(*) from public.conversations
+      where started_by = me and created_at > now() - interval '1 day') >= 20 then
+    raise exception 'Limite atteinte : 20 nouvelles conversations par jour';
+  end if;
+
+  insert into public.conversations (user_a, user_b, started_by)
+  values (a, b, me) returning id into cid;
+  return cid;
+end;
+$$;
+
+-- Liste de mes conversations avec le dernier message et le nombre de non lus.
+create or replace function public.my_conversations()
+returns table (
+  id uuid, other_id uuid, other_first text, other_last text, other_type text,
+  other_photo text, last_body text, last_at timestamptz, last_sender uuid, unread bigint
+)
+language sql stable security definer
+set search_path = public
+as $$
+  select
+    c.id, o.id, o.first_name, o.last_name, o.member_type,
+    case when o.show_photo then o.photo_path end,
+    lm.body, coalesce(lm.created_at, c.created_at), lm.sender_id,
+    (select count(*) from public.messages m
+      where m.conversation_id = c.id
+        and m.sender_id <> auth.uid()
+        and m.created_at > coalesce(r.last_read_at, '-infinity'::timestamptz))
+  from public.conversations c
+  join public.profiles o
+    on o.id = case when c.user_a = auth.uid() then c.user_b else c.user_a end
+  left join public.conversation_reads r
+    on r.conversation_id = c.id and r.user_id = auth.uid()
+  left join lateral (
+    select m.body, m.created_at, m.sender_id from public.messages m
+    where m.conversation_id = c.id order by m.created_at desc limit 1
+  ) lm on true
+  where public.is_member() and auth.uid() in (c.user_a, c.user_b)
+  order by coalesce(lm.created_at, c.created_at) desc;
+$$;
+
+-- Nombre total de messages non lus (conversations + messages de l'administration).
+create or replace function public.my_unread()
+returns bigint
+language sql stable security definer
+set search_path = public
+as $$
+  select
+    (select coalesce(sum(unread), 0) from public.my_conversations())::bigint
+    + (select count(*) from public.admin_messages am
+        where am.user_id = auth.uid() and am.from_admin
+          and am.created_at > coalesce(
+                (select p.admin_thread_read_at from public.profiles p where p.id = auth.uid()),
+                '-infinity'::timestamptz));
+$$;
+
+-- Marquer une conversation comme lue.
+create or replace function public.mark_conversation_read(cid uuid)
+returns void
+language plpgsql security definer
+set search_path = public
+as $$
+begin
+  if not public.is_participant(cid) then
+    raise exception 'Conversation introuvable';
+  end if;
+  insert into public.conversation_reads (conversation_id, user_id, last_read_at)
+  values (cid, auth.uid(), now())
+  on conflict (conversation_id, user_id) do update set last_read_at = excluded.last_read_at;
+end;
+$$;
+
+-- Anti-spam : 60 messages par heure et par personne.
+create or replace function public.limit_message_rate()
+returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+begin
+  if (select count(*) from public.messages
+      where sender_id = new.sender_id and created_at > now() - interval '1 hour') >= 60 then
+    raise exception 'Trop de messages envoyés. Réessayez dans quelques minutes.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists limit_message_rate on public.messages;
+create trigger limit_message_rate
+  before insert on public.messages
+  for each row execute function public.limit_message_rate();
+
+revoke all on function public.start_conversation(uuid), public.my_conversations(),
+  public.my_unread(), public.mark_conversation_read(uuid) from public, anon;
+grant execute on function public.start_conversation(uuid), public.my_conversations(),
+  public.my_unread(), public.mark_conversation_read(uuid) to authenticated;
+
+-- Règles de sécurité
+alter table public.conversations      enable row level security;
+alter table public.messages           enable row level security;
+alter table public.conversation_reads enable row level security;
+alter table public.reports            enable row level security;
+
+drop policy if exists conversations_select on public.conversations;
+create policy conversations_select on public.conversations
+  for select to authenticated
+  using (auth.uid() in (user_a, user_b) or (public.is_admin() and public.is_reported(id)));
+
+drop policy if exists chat_messages_select on public.messages;
+create policy chat_messages_select on public.messages
+  for select to authenticated
+  using (public.is_participant(conversation_id)
+         or (public.is_admin() and public.is_reported(conversation_id)));
+
+drop policy if exists chat_messages_insert on public.messages;
+create policy chat_messages_insert on public.messages
+  for insert to authenticated
+  with check (sender_id = (select auth.uid())
+              and public.is_member()
+              and public.is_participant(conversation_id));
+
+drop policy if exists reports_select on public.reports;
+create policy reports_select on public.reports
+  for select to authenticated
+  using (reporter_id = (select auth.uid()) or public.is_admin());
+
+drop policy if exists reports_insert on public.reports;
+create policy reports_insert on public.reports
+  for insert to authenticated
+  with check (reporter_id = (select auth.uid())
+              and public.is_member()
+              and public.is_participant(conversation_id));
+
+drop policy if exists reports_update on public.reports;
+create policy reports_update on public.reports
+  for update to authenticated
+  using (public.is_admin()) with check (public.is_admin());
+
+-- Mises à jour en direct (messages, demandes d'inscription, messages de l'administration, signalements).
+-- Les règles de sécurité ci-dessus s'appliquent aussi aux mises à jour en direct.
+do $$
+declare t text;
+begin
+  foreach t in array array['messages', 'admin_messages', 'profiles', 'reports'] loop
+    begin
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    exception
+      when duplicate_object then null;   -- déjà ajoutée
+      when undefined_object then null;   -- publication absente (hors Supabase)
+    end;
+  end loop;
+end $$;
 
 -- =====================================================================
 --  FIN. Pour vous nommer administrateur (APRÈS vous être inscrit sur
