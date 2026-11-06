@@ -71,6 +71,10 @@ alter table public.profiles add column if not exists lat double precision
 alter table public.profiles add column if not exists lng double precision
   check (lng between -180 and 180);
 
+-- Domaine d'études (liste fixe) : indispensable pour des statistiques par filière fiables.
+alter table public.profiles add column if not exists study_field text
+  check (study_field in ('law','health','engineering','it','business','humanities','arts','comms','education','other'));
+
 -- Une photo doit toujours se trouver dans le dossier de son propriétaire.
 do $$
 begin
@@ -328,7 +332,7 @@ returns table (
   country text, city text, school text, program text,
   linkedin text, instagram text, photo_path text,
   contact_email boolean, contact_message boolean, contact_chat boolean,
-  email text, country_code text, lat double precision, lng double precision
+  email text, country_code text, lat double precision, lng double precision, study_field text
 )
 language sql stable security definer
 set search_path = public
@@ -346,7 +350,8 @@ as $$
     case when p.contact_email then p.email end,  -- e-mail partagé seulement si la personne accepte ce contact
     case when p.show_location then p.country_code end,
     case when p.show_location then p.lat end,
-    case when p.show_location then p.lng end
+    case when p.show_location then p.lng end,
+    case when p.show_study then p.study_field end
   from public.profiles p
   where public.is_member()
     and p.status = 'approved'
@@ -872,6 +877,295 @@ begin
     end;
   end loop;
 end $$;
+
+-- ---------------------------------------------------------------------
+-- 9. Offres de stage, d'alternance et d'emploi (étape 6)
+--    Proposées par les alumni et le personnel, validées par l'administration.
+-- ---------------------------------------------------------------------
+create table if not exists public.offers (
+  id            uuid primary key default gen_random_uuid(),
+  author_id     uuid not null default auth.uid() references public.profiles(id) on delete cascade,
+  organization  text not null check (char_length(organization) between 2 and 120),
+  title         text not null check (char_length(title) between 3 and 140),
+  type          text not null check (type in ('internship','apprenticeship','job','other')),
+  location      text check (char_length(location) <= 120),
+  remote        boolean not null default false,
+  description   text not null check (char_length(description) between 10 and 5000),
+  apply_url     text check (char_length(apply_url) <= 300 and apply_url ~* '^https://[^[:space:]]+$'),
+  apply_email   text check (char_length(apply_email) <= 150 and apply_email ~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'),
+  deadline      date,
+  duration      text check (char_length(duration) <= 80),
+  audience      text not null default 'all' check (audience in ('all','alumni','student')),
+  status        text not null default 'pending' check (status in ('pending','published','rejected','closed')),
+  review_note   text check (char_length(review_note) <= 1000),
+  reviewed_by   uuid references public.profiles(id) on delete set null,
+  reviewed_at   timestamptz,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  check (apply_url is not null or apply_email is not null)
+);
+create index if not exists offers_status_idx on public.offers (status, created_at desc);
+
+create or replace function public.can_post_offer()
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles p
+    where p.id = auth.uid() and p.status = 'approved'
+      and (p.role = 'admin' or p.member_type in ('alumni', 'staff'))
+  );
+$$;
+
+-- Garde-fous : un auteur ne peut ni se valider lui-même, ni modifier une offre
+-- validée sans qu'elle repasse en validation.
+create or replace function public.guard_offer()
+returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  changed boolean;
+begin
+  new.updated_at := now();
+  if auth.uid() is null then
+    return new;
+  end if;
+
+  if public.is_admin() then
+    if tg_op = 'INSERT' and new.status = 'pending' then
+      new.status := 'published';                    -- les offres de l'administration sont publiées directement
+    end if;
+    if (tg_op = 'INSERT' or new.status is distinct from old.status) and new.status in ('published','rejected') then
+      new.reviewed_by := auth.uid();
+      new.reviewed_at := now();
+    end if;
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    new.status := 'pending';
+    new.review_note := null; new.reviewed_by := null; new.reviewed_at := null;
+    return new;
+  end if;
+
+  if new.author_id <> old.author_id or new.created_at <> old.created_at
+     or new.review_note is distinct from old.review_note
+     or new.reviewed_by is distinct from old.reviewed_by
+     or new.reviewed_at is distinct from old.reviewed_at then
+    raise exception 'Modification non autorisée';
+  end if;
+
+  changed := (new.title, new.organization, new.type, new.location, new.remote, new.description,
+              new.apply_url, new.apply_email, new.deadline, new.duration, new.audience)
+             is distinct from
+             (old.title, old.organization, old.type, old.location, old.remote, old.description,
+              old.apply_url, old.apply_email, old.deadline, old.duration, old.audience);
+
+  if new.status is distinct from old.status then
+    if new.status = 'closed' and not changed then
+      null;                                         -- « offre pourvue »
+    elsif new.status = 'pending' and old.status = 'rejected' then
+      null;                                         -- renvoi après correction
+    else
+      raise exception 'Changement de statut non autorisé';
+    end if;
+  elsif changed then
+    new.status := 'pending';                        -- toute modification repasse en validation
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists guard_offer on public.offers;
+create trigger guard_offer
+  before insert or update on public.offers
+  for each row execute function public.guard_offer();
+
+-- Offres visibles, avec le nom de l'auteur (le profil de l'auteur n'est pas lisible directement).
+create or replace function public.offers_list()
+returns table (
+  id uuid, organization text, title text, type text, location text, remote boolean,
+  description text, apply_url text, apply_email text, deadline date, duration text,
+  audience text, status text, review_note text, created_at timestamptz, reviewed_at timestamptz,
+  author_name text, author_year int, author_admin boolean, mine boolean
+)
+language sql stable security definer
+set search_path = public
+as $$
+  select
+    o.id, o.organization, o.title, o.type, o.location, o.remote, o.description,
+    o.apply_url, o.apply_email, o.deadline, o.duration, o.audience, o.status,
+    case when o.author_id = auth.uid() or public.is_admin() then o.review_note end,
+    o.created_at, o.reviewed_at,
+    case when a.role = 'admin' then 'Administration GSJC'
+         else trim(coalesce(a.first_name, '') || ' ' || coalesce(a.last_name, '')) end,
+    a.graduation_year,
+    (a.role = 'admin'),
+    (o.author_id = auth.uid())
+  from public.offers o
+  left join public.profiles a on a.id = o.author_id
+  where public.is_member()
+    and (o.author_id = auth.uid() or public.is_admin()
+         or (o.status = 'published' and public.audience_ok(o.audience)))
+  order by o.created_at desc;
+$$;
+
+revoke all on function public.offers_list() from public, anon;
+grant execute on function public.offers_list() to authenticated;
+
+alter table public.offers enable row level security;
+
+drop policy if exists offers_select on public.offers;
+create policy offers_select on public.offers
+  for select to authenticated
+  using (author_id = (select auth.uid()) or public.is_admin()
+         or (status = 'published' and public.audience_ok(audience)));
+
+drop policy if exists offers_insert on public.offers;
+create policy offers_insert on public.offers
+  for insert to authenticated
+  with check (author_id = (select auth.uid()) and public.can_post_offer());
+
+drop policy if exists offers_update on public.offers;
+create policy offers_update on public.offers
+  for update to authenticated
+  using (author_id = (select auth.uid()) or public.is_admin())
+  with check (author_id = (select auth.uid()) or public.is_admin());
+
+drop policy if exists offers_delete on public.offers;
+create policy offers_delete on public.offers
+  for delete to authenticated
+  using (author_id = (select auth.uid()) or public.is_admin());
+
+-- Les nouvelles offres comptent dans les « nouveautés » (même pastille que les actualités).
+create or replace function public.content_unseen()
+returns bigint
+language sql stable security definer
+set search_path = public
+as $$
+  with me as (
+    select coalesce(content_seen_at, reviewed_at, created_at) as since
+    from public.profiles where id = auth.uid()
+  )
+  select
+    (select count(*) from public.news n, me
+      where public.audience_ok(n.audience) and n.created_at > me.since
+        and n.created_by is distinct from auth.uid())
+    + (select count(*) from public.events e, me
+      where public.audience_ok(e.audience) and e.created_at > me.since
+        and e.created_by is distinct from auth.uid())
+    + (select count(*) from public.offers o, me
+      where o.status = 'published' and public.audience_ok(o.audience)
+        and coalesce(o.reviewed_at, o.created_at) > me.since
+        and o.author_id is distinct from auth.uid());
+$$;
+
+do $$
+begin
+  begin
+    alter publication supabase_realtime add table public.offers;
+  exception
+    when duplicate_object then null;
+    when undefined_object then null;
+  end;
+end $$;
+
+-- ---------------------------------------------------------------------
+-- 10. Statistiques pour l'administration (étape 7)
+--     Calculées par la base, réservées à l'administration.
+-- ---------------------------------------------------------------------
+-- Clé de regroupement : sans accents, sans majuscules, sans ponctuation.
+create or replace function public.norm_key(t text)
+returns text
+language sql immutable
+as $$
+  select regexp_replace(
+    translate(lower(trim(coalesce(t, ''))),
+              'àâäáãåéèêëíìîïóòôöõúùûüýÿçñœ', 'aaaaaaeeeeiiiiooooouuuuyycno'),
+    '[^a-z0-9]+', ' ', 'g');
+$$;
+
+create or replace function public.admin_stats(year_from int default null, year_to int default null)
+returns jsonb
+language plpgsql stable security definer
+set search_path = public
+as $$
+declare
+  res jsonb;
+begin
+  if not public.is_admin() then
+    raise exception 'Accès réservé à l''administration';
+  end if;
+
+  with al as (
+    select * from public.profiles
+    where status = 'approved' and member_type = 'alumni'
+      and (year_from is null or graduation_year >= year_from)
+      and (year_to   is null or graduation_year <= year_to)
+  )
+  select jsonb_build_object(
+    'members', (
+      select jsonb_build_object(
+        'alumni',   count(*) filter (where status = 'approved' and member_type = 'alumni'),
+        'students', count(*) filter (where status = 'approved' and member_type = 'student'),
+        'staff',    count(*) filter (where status = 'approved' and member_type = 'staff'),
+        'pending',  count(*) filter (where status = 'pending'),
+        'rejected', count(*) filter (where status = 'rejected'),
+        'draft',    count(*) filter (where status = 'draft'))
+      from public.profiles),
+    'alumni_total', (select count(*) from al),
+    'signups', (
+      select coalesce(jsonb_agg(jsonb_build_object('k', to_char(m, 'YYYY-MM'), 'n', coalesce(c, 0)) order by m), '[]'::jsonb)
+      from generate_series(date_trunc('month', now()) - interval '11 months', date_trunc('month', now()), interval '1 month') m
+      left join (
+        select date_trunc('month', created_at) as mm, count(*) as c
+        from public.profiles where status <> 'draft' group by 1) s on s.mm = m),
+    'by_country', (
+      select coalesce(jsonb_agg(jsonb_build_object('k', k, 'n', n) order by n desc, k), '[]'::jsonb)
+      from (select country as k, count(*) as n from al where country is not null group by country order by count(*) desc, country limit 15) t),
+    'by_city', (
+      select coalesce(jsonb_agg(jsonb_build_object('k', k, 'n', n) order by n desc, k), '[]'::jsonb)
+      from (select city || ', ' || country as k, count(*) as n from al where city is not null and country is not null
+            group by city, country order by count(*) desc, city limit 15) t),
+    'by_school', (
+      select coalesce(jsonb_agg(jsonb_build_object('k', k, 'n', n) order by n desc, k), '[]'::jsonb)
+      from (select mode() within group (order by school) as k, count(*) as n from al where school is not null
+            group by public.norm_key(school) order by count(*) desc, 1 limit 15) t),
+    'by_program', (
+      select coalesce(jsonb_agg(jsonb_build_object('k', k, 'n', n) order by n desc, k), '[]'::jsonb)
+      from (select mode() within group (order by program) as k, count(*) as n from al where program is not null
+            group by public.norm_key(program) order by count(*) desc, 1 limit 15) t),
+    'by_field', (
+      select coalesce(jsonb_agg(jsonb_build_object('k', k, 'n', n) order by n desc, k), '[]'::jsonb)
+      from (select coalesce(study_field, 'unknown') as k, count(*) as n from al group by 1) t),
+    'by_year', (
+      select coalesce(jsonb_agg(jsonb_build_object('k', k, 'n', n) order by k), '[]'::jsonb)
+      from (select graduation_year as k, count(*) as n from al where graduation_year is not null group by 1) t),
+    'contact', (
+      select jsonb_build_object(
+        'email',   count(*) filter (where contact_email),
+        'message', count(*) filter (where contact_message or contact_chat),
+        'located', count(*) filter (where lat is not null),
+        'total',   count(*)) from al),
+    'activity', jsonb_build_object(
+      'conversations',   (select count(*) from public.conversations),
+      'messages_30d',    (select count(*) from public.messages where created_at > now() - interval '30 days'),
+      'news',            (select count(*) from public.news),
+      'events_upcoming', (select count(*) from public.events where coalesce(ends_at, starts_at + interval '3 hours') >= now()),
+      'registrations',   (select count(*) from public.event_registrations),
+      'offers_published',(select count(*) from public.offers where status = 'published'),
+      'offers_pending',  (select count(*) from public.offers where status = 'pending'),
+      'reports_open',    (select count(*) from public.reports where status = 'open'))
+  ) into res;
+
+  return res;
+end;
+$$;
+
+revoke all on function public.admin_stats(int, int) from public, anon;
+grant execute on function public.admin_stats(int, int) to authenticated;
 
 -- =====================================================================
 --  FIN. Pour vous nommer administrateur (APRÈS vous être inscrit sur

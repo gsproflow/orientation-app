@@ -19,6 +19,12 @@ const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const TYPE_LABEL = { alumni: 'Ancien élève', student: 'Lycéen', staff: 'Personnel' };
+const STUDY_FIELDS = {
+  law: 'Droit & sciences politiques', health: 'Médecine, pharmacie & santé', engineering: 'Sciences & ingénierie',
+  it: 'Informatique & numérique', business: 'Commerce, gestion & économie', humanities: 'Lettres, langues & sciences humaines',
+  arts: 'Arts, design & architecture', comms: 'Communication & journalisme', education: 'Éducation & enseignement', other: 'Autre domaine',
+};
+const studyLabel = (k) => STUDY_FIELDS[k] || 'Non renseigné';
 const fmtDate = (d) => new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
 const fmtDateTime = (d) =>
   new Date(d).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -155,6 +161,7 @@ function shell(inner, { wide = false } = {}) {
           <a class="dlink ${act('#/carte')}" href="#/carte">Carte</a>
           <a class="dlink ${act('#/actus')}" href="#/actus">Actualités ${badge('js-content-badge')}</a>
           <a class="dlink ${act('#/agenda')}" href="#/agenda">Agenda</a>
+          <a class="dlink ${act('#/offres')}" href="#/offres">Offres</a>
           <a class="dlink ${act('#/messages')}" href="#/messages">Messages ${badge('js-msg-badge', 'navMsgBadge')}</a>` : ''}
         ${isAdmin ? `<a class="dlink ${act('#/admin')}" href="#/admin">Administration ${badge('js-admin-badge', 'navBadge')}</a>
           <a class="mlink ${act('#/admin')}" href="#/admin">⚙ Admin ${badge('js-admin-badge')}</a>` : ''}
@@ -168,7 +175,7 @@ function shell(inner, { wide = false } = {}) {
   const tabbar = approved
     ? `<nav class="tabbar" aria-label="Navigation principale">
         ${tab('#/', '🏠', 'Accueil')}${tab('#/annuaire', '👥', 'Annuaire')}${tab('#/carte', '🗺️', 'Carte')}
-        ${tab('#/actus', '📰', 'Actus', badge('js-content-badge'), h === '#/actus' || h === '#/agenda')}
+        ${tab('#/actus', '📰', 'Actus', badge('js-content-badge'), h === '#/actus' || h === '#/agenda' || h === '#/offres')}
         ${tab('#/messages', '💬', 'Messages', badge('js-msg-badge'))}${tab('#/profil', '👤', 'Profil')}
       </nav>` : '';
   document.body.classList.toggle('has-tabbar', approved);
@@ -241,7 +248,9 @@ function route() {
   if (h === '#/carte') return viewMap();
   if (h === '#/actus') return viewFeed('news');
   if (h === '#/agenda') return viewFeed('events');
+  if (h === '#/offres') return viewOffers();
   if (h === '#/admin' && profile.role === 'admin') return viewAdmin();
+  if (h === '#/stats' && profile.role === 'admin') return viewStats();
   return viewHome();
 }
 
@@ -486,6 +495,9 @@ function viewForm() {
           <div class="field" data-field="school"><label for="school">Université / école <span class="req">*</span></label><input id="school" name="school" type="text" maxlength="150" value="${v('school')}"><p class="err" data-err="school"></p></div>
         </div>
         <div class="field" data-field="program"><label for="program">Formation suivie <span class="req">*</span></label><input id="program" name="program" type="text" maxlength="150" placeholder="Ex. : Licence d’économie, Classe préparatoire MPSI…" value="${v('program')}"><p class="err" data-err="program"></p></div>
+        <div class="field" data-field="study_field"><label for="study_field">Domaine d’études <span class="req">*</span></label>
+          <select id="study_field" name="study_field"><option value="">Choisir…</option>${Object.entries(STUDY_FIELDS).map(([k, l]) => `<option value="${k}" ${p.study_field === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
+          <p class="hint">Sert aux statistiques sur le devenir des élèves du GSJC.</p><p class="err" data-err="study_field"></p></div>
         <h3 style="margin:8px 0">Réseaux sociaux <span class="req">*</span> <span class="hint small" style="font-weight:400">(au moins un)</span></h3>
         <div class="grid2">
           <div class="field" data-field="linkedin"><label for="linkedin">LinkedIn</label><input id="linkedin" name="linkedin" type="text" inputmode="url" placeholder="linkedin.com/in/votre-nom" value="${v('linkedin')}"><p class="err" data-err="linkedin"></p></div>
@@ -608,7 +620,7 @@ function readForm(form) {
     last_name: g('last_name'),
     graduation_year: null, country: null, city: null, school: null, program: null,
     instagram: null, linkedin: null, class_level: null, target_program: null, job_title: null,
-    country_code: null, lat: null, lng: null,
+    country_code: null, lat: null, lng: null, study_field: null,
     contact_email: fd.has('contact_email'),
     contact_message: fd.has('contact_message'),
     contact_chat: fd.has('contact_message'), // message et chat forment un seul système
@@ -625,6 +637,7 @@ function readForm(form) {
     out.city = g('city') || null;
     out.school = g('school') || null;
     out.program = g('program') || null;
+    out.study_field = g('study_field') || null;
     out.instagram = normInstagram(g('instagram')) || null;
     out.linkedin = normLinkedin(g('linkedin')) || null;
   } else if (t === 'student') {
@@ -642,7 +655,7 @@ function validateProfile(v, consent) {
   need('first_name'); need('last_name');
   if (!profile.photo_path && !pendingPhoto) e.push(['photo', 'Une photo est obligatoire.']);
   if (v.member_type === 'alumni') {
-    ['graduation_year', 'country', 'city', 'school', 'program'].forEach((k) => need(k));
+    ['graduation_year', 'country', 'city', 'school', 'program', 'study_field'].forEach((k) => need(k));
     if (v.country && !v.country_code) e.push(['country', 'Choisissez un pays dans la liste.']);
     if (!v.linkedin && !v.instagram) e.push(['social', 'Renseignez au moins un réseau social (LinkedIn ou Instagram).']);
     if (v.linkedin && !/^https:\/\/([a-z0-9-]+\.)?linkedin\.com\/\S+$/i.test(v.linkedin)) e.push(['linkedin', 'Lien LinkedIn invalide (ex. linkedin.com/in/votre-nom).']);
@@ -787,6 +800,8 @@ async function viewHome() {
   currentView = 'home';
   const isAdmin = profile.role === 'admin';
   shell(`
+    ${profile.member_type === 'alumni' && !profile.study_field ? `<div class="warn-banner">🎓 <b>Un dernier détail :</b> indiquez votre <b>domaine d’études</b> pour aider l’établissement à suivre le devenir des élèves.
+      <a class="btn sm" style="margin-left:6px" href="#/profil">Compléter mon profil</a></div>` : ''}
     <section class="card hero accent">
       <div id="homeAvatar">${avatarHtml(profile, null, 'lg')}</div>
       <div>
@@ -836,6 +851,7 @@ async function viewDirectory() {
       <div class="grid2">
         <div class="field"><label for="dirCountry" class="sr">Pays</label><select id="dirCountry"><option value="">Tous les pays</option></select></div>
         <div class="field"><label for="dirYear" class="sr">Promotion</label><select id="dirYear"><option value="">Toutes les promotions</option></select></div>
+        <div class="field"><label for="dirField" class="sr">Domaine d’études</label><select id="dirField"><option value="">Tous les domaines</option>${Object.entries(STUDY_FIELDS).map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join('')}</select></div>
       </div>
       <p class="small muted" id="dirCount" style="margin-top:-4px"></p>
     </div>
@@ -857,6 +873,7 @@ async function viewDirectory() {
   $('#dirQ').addEventListener('input', again);
   $('#dirCountry').addEventListener('change', again);
   $('#dirYear').addEventListener('change', again);
+  $('#dirField').addEventListener('change', again);
   renderDirectory();
 }
 
@@ -867,9 +884,11 @@ async function renderDirectory() {
   const q = fold($('#dirQ').value.trim());
   const country = $('#dirCountry').value;
   const year = $('#dirYear').value;
+  const field = $('#dirField').value;
   const rows = dirRows.filter((r) =>
     (!country || r.country === country) &&
     (!year || String(r.graduation_year) === year) &&
+    (!field || r.study_field === field) &&
     (!q || fold([r.first_name, r.last_name, r.school, r.program, r.city, r.country].join(' ')).includes(q)));
 
   $('#dirCount').textContent = rows.length === 1 ? '1 alumni' : `${rows.length} alumni`;
@@ -893,7 +912,7 @@ function memberCard(r) {
   const name = `${r.first_name || ''} ${r.last_name || ''}`.trim();
   const study = [r.program, r.school].filter(Boolean).map(esc).join(' · ');
   const place = [r.city, r.country].filter(Boolean).map(esc).join(', ');
-  const tags = [r.contact_email && '✉ E-mail', (r.contact_message || r.contact_chat) && '💬 Message']
+  const tags = [r.study_field && '🎓 ' + studyLabel(r.study_field), r.contact_email && '✉ E-mail', (r.contact_message || r.contact_chat) && '💬 Message']
     .filter(Boolean).map((t) => `<span class="tag">${t}</span>`).join('');
   return `<article class="member">
     <div class="req-top">${avatarHtml(r, url, 'md')}
@@ -914,6 +933,7 @@ async function openMember(id) {
   const name = `${r.first_name || ''} ${r.last_name || ''}`.trim();
   const kv = [];
   if (r.program || r.school) kv.push(['Études', [r.program, r.school].filter(Boolean).map(esc).join(' — ')]);
+  if (r.study_field) kv.push(['Domaine', esc(studyLabel(r.study_field))]);
   if (r.city || r.country) kv.push(['Lieu', [r.city, r.country].filter(Boolean).map(esc).join(', ')]);
   const links = [];
   const li = safeLinkedin(r.linkedin);
@@ -981,7 +1001,8 @@ function startLive() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, onChatMessage)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'admin_messages' }, onAdminMessage)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'news' }, (p) => onContent('news', p.new))
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'events' }, (p) => onContent('events', p.new));
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'events' }, (p) => onContent('events', p.new))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'offers' }, onOfferEvent);
     if (isAdmin) {
       live.on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, onProfileEvent)
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reports' }, onReportEvent);
@@ -1511,10 +1532,7 @@ function viewFeed(kind) {
   shell(`
     <div class="page-head tight"><h1>${kind === 'news' ? 'Actualités' : 'Agenda'}</h1>
       ${isAdmin ? '<button class="btn sm" data-action="publish">＋ Publier</button>' : ''}</div>
-    <div class="seg seg-links" style="max-width:420px">
-      <a href="#/actus" aria-current="${kind === 'news'}">Actualités</a>
-      <a href="#/agenda" aria-current="${kind === 'events'}">Agenda</a>
-    </div>
+    ${feedSeg(kind)}
     <div id="feedList" class="feed"><p class="muted">Chargement…</p></div>`);
   loadFeed().then(markContentSeen);
 }
@@ -1648,16 +1666,19 @@ async function refreshEvents() {
 }
 
 async function loadHomeFeed() {
-  const [ev, nw] = await Promise.all([
+  const [ev, nw, of] = await Promise.all([
     sb.rpc('events_list'),
     sb.from('news').select('*').order('pinned', { ascending: false }).order('created_at', { ascending: false }).limit(2),
+    sb.rpc('offers_list'),
   ]);
   const box = $('#homeFeed');
   if (!box || currentView !== 'home') return;
   feedEvents = ev.data || [];
   feedNews = nw.data || [];
+  offerRows = of.data || [];
+  const offs = offerRows.filter((o) => o.status === 'published' && !offerExpired(o)).slice(0, 2);
   const up = feedEvents.filter(isUpcoming).sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at)).slice(0, 2);
-  if (!up.length && !feedNews.length) { box.innerHTML = ''; return; }
+  if (!up.length && !feedNews.length && !offs.length) { box.innerHTML = ''; return; }
   box.innerHTML = `<section class="card">
     ${up.length ? `<h2>À venir</h2>${up.map((e) => {
       const d = new Date(e.starts_at);
@@ -1668,7 +1689,11 @@ async function loadHomeFeed() {
     ${feedNews.length ? `<h2>Dernières actualités</h2>${feedNews.map((n) =>
       `<button class="mini" data-action="openNews" data-id="${esc(n.id)}"><span class="mini-ic" aria-hidden="true">📰</span>
         <span class="mini-t"><b>${esc(n.title)}</b><span class="small muted">${fmtDate(n.created_at)}</span></span></button>`).join('')}
-      <p style="margin:6px 0 0"><a href="#/actus">Toutes les actualités →</a></p>` : ''}
+      <p style="margin:6px 0 14px"><a href="#/actus">Toutes les actualités →</a></p>` : ''}
+    ${offs.length ? `<h2>Offres récentes</h2>${offs.map((o) =>
+      `<button class="mini" data-action="openOffer" data-id="${esc(o.id)}"><span class="mini-ic" aria-hidden="true">💼</span>
+        <span class="mini-t"><b>${esc(o.title)}</b><span class="small muted">${esc(OFFER_TYPES[o.type])} · ${esc(o.organization)}</span></span></button>`).join('')}
+      <p style="margin:6px 0 0"><a href="#/offres">Toutes les offres →</a></p>` : ''}
   </section>`;
 }
 
@@ -1864,9 +1889,359 @@ function confirmDelete(kind, id) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Offres de stage et d'emploi                                         */
+/* ------------------------------------------------------------------ */
+const OFFER_TYPES = { internship: 'Stage', apprenticeship: 'Alternance', job: 'Emploi', other: 'Autre' };
+const OFFER_CHIPS = [['', 'Toutes'], ['internship', 'Stages'], ['apprenticeship', 'Alternance'], ['job', 'Emplois'], ['other', 'Autres']];
+const OFFER_STATUS = { pending: ['⏳ En attente de validation', 'wait'], published: ['✓ Publiée', 'ok'], rejected: ['✕ Refusée', 'no'], closed: ['Pourvue', ''] };
+let offerRows = [];
+let offerType = '';
+let offerMine = false;
+let offerQ = '';
+let offerShowExpired = false;
+const offerExpired = (o) => !!o.deadline && new Date(o.deadline + 'T23:59:59') < new Date();
+const offerDeadline = (o) => new Date(o.deadline + 'T12:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+
+function feedSeg(cur) {
+  const l = (h, k, t) => `<a href="${h}" aria-current="${cur === k}">${t}</a>`;
+  return `<div class="seg seg-links">${l('#/actus', 'news', 'Actualités')}${l('#/agenda', 'events', 'Agenda')}${l('#/offres', 'offers', 'Offres')}</div>`;
+}
+function adminSeg(cur) {
+  const l = (h, k, t) => `<a href="${h}" aria-current="${cur === k}">${t}</a>`;
+  return `<div class="seg seg-links seg-2">${l('#/admin', 'admin', 'Validation')}${l('#/stats', 'stats', 'Statistiques')}</div>`;
+}
+
+function viewOffers() {
+  currentView = 'offers';
+  const canPost = profile.member_type !== 'student';
+  shell(`
+    <div class="page-head tight"><h1>Offres</h1>${canPost ? '<button class="btn sm" data-action="newOffer">＋ Proposer</button>' : ''}</div>
+    ${feedSeg('offers')}
+    <div class="chips scroll" id="offerChips"></div>
+    <div class="field"><label class="sr" for="offerQ">Rechercher</label>
+      <input type="search" id="offerQ" placeholder="Rechercher : poste, entreprise, ville…" autocomplete="off" value="${esc(offerQ)}"></div>
+    <label class="check small" style="margin-bottom:12px"><input type="checkbox" id="offerExp" ${offerShowExpired ? 'checked' : ''}><span>Afficher les offres expirées ou pourvues</span></label>
+    <div id="offerList" class="feed"><p class="muted">Chargement…</p></div>`);
+  $('#offerQ').addEventListener('input', (e) => { offerQ = e.target.value; renderOffers(); });
+  $('#offerExp').addEventListener('change', (e) => { offerShowExpired = e.target.checked; renderOffers(); });
+  loadOffers().then(markContentSeen);
+}
+
+async function loadOffers() {
+  const { data, error } = await sb.rpc('offers_list');
+  const box = $('#offerList');
+  if (!box || currentView !== 'offers') return;
+  if (error) { box.innerHTML = `<p class="err">${esc(errMsg(error))}</p>`; return; }
+  offerRows = data || [];
+  renderOffers();
+}
+
+function offerCard(o) {
+  const exp = offerExpired(o);
+  const st = o.mine ? OFFER_STATUS[o.status] : null;
+  const where = [o.location, o.remote ? 'à distance' : null].filter(Boolean).join(' · ');
+  const mineActions = o.mine || profile.role === 'admin'
+    ? `${o.mine && (o.status === 'published' || o.status === 'pending') ? `<button class="btn ghost sm" data-action="closeOffer" data-id="${esc(o.id)}">Marquer comme pourvue</button>` : ''}
+       <button class="btn ghost sm" data-action="editOffer" data-id="${esc(o.id)}">Modifier</button>
+       <button class="btn danger-ghost sm" data-action="deleteOffer" data-id="${esc(o.id)}">Supprimer</button>` : '';
+  return `<article class="post offer ${exp ? 'expired' : ''}"><div class="post-body">
+    <div class="tags"><span class="tag">${esc(OFFER_TYPES[o.type])}</span>${o.remote ? '<span class="tag">🌐 À distance</span>' : ''}${audTag(o.audience)}
+      ${st ? `<span class="tag ${st[1]}">${st[0]}</span>` : ''}${exp ? '<span class="tag no">Expirée</span>' : ''}</div>
+    <h3>${esc(o.title)}</h3>
+    <p class="o-org"><b>${esc(o.organization)}</b>${where ? ' · ' + esc(where) : ''}</p>
+    <p class="small muted">${o.deadline ? (exp ? 'Date limite dépassée' : 'À postuler avant le ' + esc(offerDeadline(o))) + ' · ' : ''}Proposée par ${esc(o.author_name || 'un membre')}${o.author_year && !o.author_admin ? ' (promo ' + esc(o.author_year) + ')' : ''}</p>
+    ${o.mine && o.status === 'rejected' && o.review_note ? `<p class="small" style="color:var(--danger)"><b>Motif du refus :</b> ${esc(o.review_note)}</p>` : ''}
+    <div class="row"><button class="btn ghost sm" data-action="openOffer" data-id="${esc(o.id)}">Voir l’offre</button>${mineActions}</div>
+  </div></article>`;
+}
+
+function renderOffers() {
+  const chips = $('#offerChips');
+  const box = $('#offerList');
+  if (!chips || !box) return;
+  const canPost = profile.member_type !== 'student';
+  chips.innerHTML = OFFER_CHIPS.map(([k, l]) => `<button class="chip ${!offerMine && offerType === k ? 'on' : ''}" data-action="offerType" data-t="${k}">${l}</button>`).join('') +
+    (canPost ? `<button class="chip ${offerMine ? 'on' : ''}" data-action="offerMineToggle">Mes offres</button>` : '');
+  const q = fold(offerQ.trim());
+  let rows = offerRows.filter((o) => (offerMine ? o.mine : o.status === 'published'));
+  if (!offerShowExpired && !offerMine) rows = rows.filter((o) => !offerExpired(o));
+  if (offerType) rows = rows.filter((o) => o.type === offerType);
+  if (q) rows = rows.filter((o) => fold([o.title, o.organization, o.location, o.description].join(' ')).includes(q));
+  box.innerHTML = rows.length ? rows.map(offerCard).join('')
+    : `<div class="empty">${offerMine ? 'Vous n’avez proposé aucune offre pour le moment.' : 'Aucune offre ne correspond pour le moment.'}</div>`;
+}
+
+function openOffer(id) {
+  const o = offerRows.find((x) => String(x.id) === String(id));
+  if (!o) return;
+  const exp = offerExpired(o);
+  const safe = (u) => /^https:\/\//i.test(u || '');
+  const apply = [];
+  if (safe(o.apply_url)) apply.push(`<a class="btn" href="${esc(o.apply_url)}" target="_blank" rel="noopener noreferrer">Postuler en ligne ↗</a>`);
+  if (o.apply_email) apply.push(`<a class="btn ${safe(o.apply_url) ? 'ghost' : ''}" href="mailto:${esc(o.apply_email)}?subject=${encodeURIComponent('Candidature : ' + o.title)}">✉ Postuler par e-mail</a>`);
+  const st = OFFER_STATUS[o.status];
+  openModal(`
+    <div class="tags"><span class="tag">${esc(OFFER_TYPES[o.type])}</span>${o.remote ? '<span class="tag">🌐 À distance</span>' : ''}${audTag(o.audience)}${exp ? '<span class="tag no">Expirée</span>' : ''}</div>
+    <h2 style="margin-top:6px">${esc(o.title)}</h2>
+    <p><b>${esc(o.organization)}</b></p>
+    ${o.status !== 'published' && (o.mine || profile.role === 'admin') ? `<div class="warn-banner small" style="margin-top:8px">${st[0]}${o.status === 'pending' ? ' : visible par les membres après validation par l’administration.' : ''}</div>` : ''}
+    <dl class="kv" style="margin:10px 0">
+      ${o.location || o.remote ? `<dt>Lieu</dt><dd>${esc([o.location, o.remote ? 'à distance possible' : null].filter(Boolean).join(' · '))}</dd>` : ''}
+      ${o.duration ? `<dt>Durée</dt><dd>${esc(o.duration)}</dd>` : ''}
+      ${o.deadline ? `<dt>Date limite</dt><dd>${esc(offerDeadline(o))}</dd>` : ''}
+      <dt>Proposée par</dt><dd>${esc(o.author_name || 'un membre')}${o.author_year && !o.author_admin ? ' (promo ' + esc(o.author_year) + ')' : ''}</dd>
+    </dl>
+    <p>${withBreaks(o.description)}</p>
+    ${apply.length && !exp ? `<div class="row" style="margin-top:14px">${apply.join('')}</div>` : ''}
+    ${exp ? '<p class="no-line" style="margin-top:12px">La date limite est dépassée.</p>' : ''}
+    <p class="small muted" style="margin-top:12px">🔒 Ne communiquez jamais de coordonnées bancaires ni de copie de pièce d’identité pour candidater. En cas de doute sur une offre, parlez-en à l’administration.</p>
+    <div class="row end" style="margin-top:14px">
+      ${o.mine || profile.role === 'admin' ? `<button class="btn ghost sm" data-action="editOffer" data-id="${esc(o.id)}">Modifier</button><button class="btn danger-ghost sm" data-action="deleteOffer" data-id="${esc(o.id)}">Supprimer</button>` : ''}
+      <button class="btn" data-action="closeModal">Fermer</button></div>`);
+}
+
+function openOfferForm(item) {
+  const editing = !!item;
+  const v = (k) => esc(item?.[k] ?? '');
+  const isAdmin = profile.role === 'admin';
+  const box = openModal(`
+    <h2>${editing ? 'Modifier l’offre' : 'Proposer une offre'}</h2>
+    ${isAdmin ? '' : `<p class="muted small">Votre offre sera vérifiée par l’administration avant d’être visible par les élèves et les anciens.</p>`}
+    <form id="offForm" novalidate style="margin-top:10px">
+      <div class="field" data-field="type"><label for="oType">Type d’offre <span class="req">*</span></label>
+        <select id="oType"><option value="">Choisir…</option>${Object.entries(OFFER_TYPES).map(([k, l]) => `<option value="${k}" ${item?.type === k ? 'selected' : ''}>${l}</option>`).join('')}</select><p class="err" data-err="type"></p></div>
+      <div class="field" data-field="title"><label for="oTitle">Intitulé du poste <span class="req">*</span></label>
+        <input id="oTitle" type="text" maxlength="140" value="${v('title')}" placeholder="Ex. : Stage en analyse financière"><p class="err" data-err="title"></p></div>
+      <div class="field" data-field="org"><label for="oOrg">Entreprise ou organisme <span class="req">*</span></label>
+        <input id="oOrg" type="text" maxlength="120" value="${v('organization')}"><p class="err" data-err="org"></p></div>
+      <div class="grid2">
+        <div class="field"><label for="oLoc">Lieu</label><input id="oLoc" type="text" maxlength="120" value="${v('location')}" placeholder="Ville, pays"></div>
+        <div class="field"><label for="oDur">Durée</label><input id="oDur" type="text" maxlength="80" value="${v('duration')}" placeholder="Ex. : 3 mois, à partir de juin"></div>
+      </div>
+      <label class="switch"><input type="checkbox" id="oRemote" ${item?.remote ? 'checked' : ''}><span class="track"></span><span>🌐 Possible à distance</span></label>
+      <div class="field" data-field="desc"><label for="oDesc">Description <span class="req">*</span></label>
+        <textarea id="oDesc" rows="5" maxlength="5000" placeholder="Missions, profil recherché, conditions…">${v('description')}</textarea><p class="err" data-err="desc"></p></div>
+      <p class="small"><b>Comment postuler ?</b> <span class="req">*</span> <span class="hint">(au moins un des deux)</span></p>
+      <div class="grid2">
+        <div class="field" data-field="url"><label for="oUrl">Lien de candidature</label><input id="oUrl" type="text" inputmode="url" value="${v('apply_url')}" placeholder="https://…"><p class="err" data-err="url"></p></div>
+        <div class="field" data-field="mail"><label for="oMail">Adresse e-mail</label><input id="oMail" type="email" value="${v('apply_email')}" placeholder="recrutement@…"><p class="err" data-err="mail"></p></div>
+      </div>
+      <p class="err" data-err="apply"></p>
+      <div class="grid2">
+        <div class="field" data-field="deadline"><label for="oDead">Date limite <span class="hint">(facultatif)</span></label><input id="oDead" type="date" value="${v('deadline')}"><p class="err" data-err="deadline"></p></div>
+        <div class="field"><label for="oAud">Public concerné</label>
+          <select id="oAud">${Object.entries(AUDIENCE).map(([k, l]) => `<option value="${k}" ${(item?.audience || 'all') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      </div>
+      <div class="row end" style="margin-top:12px"><button type="button" class="btn ghost" data-action="closeModal">Annuler</button>
+        <button type="submit" class="btn" id="oSave">${editing ? 'Enregistrer' : (isAdmin ? 'Publier' : 'Envoyer pour validation')}</button></div>
+    </form>`);
+  const form = $('#offForm', box);
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    $$('[data-err]', form).forEach((n) => (n.textContent = ''));
+    $$('.field.invalid', form).forEach((n) => n.classList.remove('invalid'));
+    const val = (id) => $(id, form).value.trim();
+    const d = { type: val('#oType'), title: val('#oTitle'), organization: val('#oOrg'), location: val('#oLoc') || null, duration: val('#oDur') || null,
+      remote: $('#oRemote', form).checked, description: val('#oDesc'), apply_url: val('#oUrl') || null, apply_email: val('#oMail') || null,
+      deadline: val('#oDead') || null, audience: $('#oAud', form).value };
+    if (d.apply_url && !/^https?:\/\//i.test(d.apply_url)) d.apply_url = 'https://' + d.apply_url;
+    if (d.apply_url) d.apply_url = d.apply_url.replace(/^http:\/\//i, 'https://');
+    const errs = [];
+    if (!d.type) errs.push(['type', 'Choisissez un type d’offre.']);
+    if (d.title.length < 3) errs.push(['title', 'Indiquez un intitulé (3 caractères minimum).']);
+    if (d.organization.length < 2) errs.push(['org', 'Indiquez l’entreprise ou l’organisme.']);
+    if (d.description.length < 10) errs.push(['desc', 'Décrivez l’offre (10 caractères minimum).']);
+    if (!d.apply_url && !d.apply_email) errs.push(['apply', 'Indiquez un lien de candidature ou une adresse e-mail.']);
+    if (d.apply_url && !/^https:\/\/[^\s]+\.[^\s]+$/i.test(d.apply_url)) errs.push(['url', 'Lien invalide (il doit commencer par https://).']);
+    if (d.apply_email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d.apply_email)) errs.push(['mail', 'Adresse e-mail invalide.']);
+    if (d.deadline && !editing && new Date(d.deadline + 'T23:59:59') < new Date()) errs.push(['deadline', 'La date limite est déjà passée.']);
+    if (errs.length) {
+      errs.forEach(([f, m]) => { const n = $(`[data-err="${f}"]`, form); if (n) n.textContent = m; $(`[data-field="${f}"]`, form)?.classList.add('invalid'); });
+      return;
+    }
+    const btn = $('#oSave', form);
+    busy(btn, true, 'Envoi…');
+    const res = editing ? await sb.from('offers').update(d).eq('id', item.id)
+      : await sb.from('offers').insert(isAdmin ? { ...d, status: 'published' } : d);
+    if (res.error) { busy(btn, false); return toast(errMsg(res.error), 'err'); }
+    closeModal();
+    toast(isAdmin ? (editing ? 'Offre modifiée.' : 'Offre publiée.')
+      : (editing ? (item.status === 'pending' ? 'Offre modifiée.' : 'Modifications envoyées : l’offre sera de nouveau vérifiée.') : 'Offre envoyée. Elle sera visible après validation par l’administration.'));
+    if (currentView === 'offers') { if (!isAdmin) offerMine = true; loadOffers(); }
+    else if (currentView === 'admin' && adminTab === 'offers') loadOffersAdmin();
+    else if (currentView === 'home') loadHomeFeed();
+    else if (!isAdmin) location.hash = '#/offres';
+  });
+}
+
+async function setOfferStatus(id, status, message) {
+  const { error } = await sb.from('offers').update({ status, review_note: null }).eq('id', id);
+  if (error) { toast(errMsg(error), 'err'); return false; }
+  toast(message);
+  closeModal();
+  if (currentView === 'offers') loadOffers();
+  if (currentView === 'admin') { loadStats(); if (adminTab === 'offers') loadOffersAdmin(); }
+  return true;
+}
+
+function confirmDeleteOffer(id) {
+  const o = offerRows.find((x) => String(x.id) === String(id));
+  if (!o) return;
+  closeModal();
+  const box = openModal(`
+    <h2>Supprimer « ${esc(o.title)} » ?</h2><p>Cette action est définitive.</p>
+    <div class="row end" style="margin-top:14px"><button class="btn ghost" data-action="closeModal">Annuler</button><button class="btn danger" id="offDelOk">Oui, supprimer</button></div>`);
+  $('#offDelOk', box).addEventListener('click', async (e) => {
+    busy(e.target, true, 'Suppression…');
+    const { error } = await sb.from('offers').delete().eq('id', id);
+    if (error) { busy(e.target, false); return toast(errMsg(error), 'err'); }
+    closeModal(); toast('Offre supprimée.');
+    if (currentView === 'offers') loadOffers();
+    if (currentView === 'admin') { loadStats(); if (adminTab === 'offers') loadOffersAdmin(); }
+  });
+}
+
+function onOfferEvent({ eventType, new: row }) {
+  if (!row) return;
+  const mine = row.author_id === profile.id;
+  const admin = profile.role === 'admin';
+  if (admin && eventType === 'INSERT' && row.status === 'pending' && !mine) {
+    notifyUser('Nouvelle offre à valider', row.title);
+    refreshBadge();
+    if (currentView === 'admin') { loadStats(); if (adminTab === 'offers') loadOffersAdmin(); }
+    return;
+  }
+  if (mine && eventType === 'UPDATE' && (row.status === 'published' || row.status === 'rejected')) {
+    notifyUser(row.status === 'published' ? 'Votre offre a été publiée' : 'Votre offre a été refusée', row.title);
+    if (currentView === 'offers') loadOffers();
+    return;
+  }
+  if (!mine && !admin && eventType === 'UPDATE' && row.status === 'published') {
+    refreshContentBadge();
+    notifyUser('Nouvelle offre', row.title);
+    if (currentView === 'offers') loadOffers();
+    if (currentView === 'home') loadHomeFeed();
+    return;
+  }
+  if (admin) refreshBadge();
+}
+
+async function loadOffersAdmin() {
+  const list = $('#adminList');
+  if (!list) return;
+  const { data, error } = await sb.rpc('offers_list');
+  if (adminTab !== 'offers' || !$('#adminList')) return;
+  if (error) { list.innerHTML = `<p class="err">${esc(errMsg(error))}</p>`; return; }
+  offerRows = data || [];
+  const rows = offerRows.filter((o) => o.status === 'pending').reverse();
+  if (!rows.length) { list.innerHTML = '<div class="empty">Aucune offre à valider 🎉</div>'; return; }
+  list.innerHTML = rows.map((o) => `<article class="req-card">
+    <div><span class="pill wait">À valider</span> <span class="tag">${esc(OFFER_TYPES[o.type])}</span> <span class="small muted">${fmtDate(o.created_at)}</span></div>
+    <h3>${esc(o.title)}</h3>
+    <p><b>${esc(o.organization)}</b>${o.location ? ' · ' + esc(o.location) : ''}</p>
+    <p class="small muted">Proposée par <b>${esc(o.author_name || '?')}</b>${o.author_year ? ' (promo ' + esc(o.author_year) + ')' : ''}</p>
+    <p class="small">${esc(o.description.length > 200 ? o.description.slice(0, 200) + '…' : o.description)}</p>
+    <div class="req-actions">
+      <button class="btn ok sm" data-action="approveOffer" data-id="${esc(o.id)}">✓ Publier</button>
+      <button class="btn danger-ghost sm" data-action="rejectOffer" data-id="${esc(o.id)}">✕ Refuser</button>
+      <button class="btn ghost sm" data-action="openOffer" data-id="${esc(o.id)}">👁 Voir</button></div>
+  </article>`).join('');
+}
+
+/* ------------------------------------------------------------------ */
+/* Statistiques (administration)                                       */
+/* ------------------------------------------------------------------ */
+const pct = (n, t) => (t ? Math.round((n / t) * 100) + ' %' : '–');
+
+function barList(items, label, total) {
+  if (!items || !items.length) return '<p class="muted small">Pas encore de données.</p>';
+  const max = Math.max(...items.map((i) => i.n));
+  return `<ul class="bars">${items.map((i) => `<li><span class="b-l">${esc(label ? label(i.k) : i.k)}</span>
+    <span class="b-t"><i style="width:${Math.max(3, Math.round((i.n / max) * 100))}%"></i></span>
+    <b>${i.n}${total ? ` <small>${pct(i.n, total)}</small>` : ''}</b></li>`).join('')}</ul>`;
+}
+function colChart(items, label) {
+  if (!items || !items.length) return '<p class="muted small">Pas encore de données.</p>';
+  const max = Math.max(1, ...items.map((i) => i.n));
+  return `<div class="cols">${items.map((i) => `<div class="col"><b>${i.n || ''}</b><i style="height:${Math.round((i.n / max) * 100)}%"></i><span>${esc(label ? label(i.k) : i.k)}</span></div>`).join('')}</div>`;
+}
+const tile = (n, l) => `<div class="stat"><b>${esc(n)}</b><span>${esc(l)}</span></div>`;
+const monthLabel = (k) => new Date(k + '-15').toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '') + ' ' + k.slice(2, 4);
+
+async function viewStats() {
+  currentView = 'stats';
+  const y = new Date().getFullYear();
+  const opts = Array.from({ length: y + 2 - 2000 }, (_, i) => y + 1 - i).map((v) => `<option value="${v}">${v}</option>`).join('');
+  shell(`
+    <div class="page-head tight"><h1>Administration</h1>
+      <div class="row no-print"><button class="btn ghost sm" data-action="printStats">🖨 Imprimer / PDF</button>
+        <button class="btn ghost sm" data-action="exportAlumni">⬇ Exporter les alumni</button></div></div>
+    ${adminSeg('stats')}
+    <div class="card filters no-print"><div class="grid2">
+      <div class="field"><label for="stFrom">Promotions : de</label><select id="stFrom"><option value="">Toutes</option>${opts}</select></div>
+      <div class="field"><label for="stTo">à</label><select id="stTo"><option value="">Toutes</option>${opts}</select></div></div></div>
+    <div id="statsBody"><p class="muted">Chargement…</p></div>`, { wide: true });
+  $('#stFrom').addEventListener('change', loadStatsPage);
+  $('#stTo').addEventListener('change', loadStatsPage);
+  loadStatsPage();
+}
+
+async function loadStatsPage() {
+  const f = $('#stFrom')?.value, t = $('#stTo')?.value;
+  const { data: d, error } = await sb.rpc('admin_stats', { year_from: f ? Number(f) : null, year_to: t ? Number(t) : null });
+  const box = $('#statsBody');
+  if (!box || currentView !== 'stats') return;
+  if (error) { box.innerHTML = `<p class="err">${esc(errMsg(error))}</p>`; return; }
+  const m = d.members, c = d.contact, a = d.activity;
+  const unknown = (d.by_field.find((x) => x.k === 'unknown') || { n: 0 }).n;
+  const range = f || t ? ` · promotions ${f || '…'} à ${t || '…'}` : '';
+  box.innerHTML = `
+    <p class="print-only">Alumni GSJC Rabat · statistiques du ${fmtDate(new Date())}${esc(range)}</p>
+    <h2 class="st-h">Membres</h2>
+    <div class="stats">${tile(m.alumni, 'Alumni validés')}${tile(m.students, 'Lycéens validés')}${tile(m.staff, 'Personnel')}${tile(m.pending, 'Inscriptions en attente')}</div>
+    <h2 class="st-h">Devenir des alumni <small class="muted">· ${d.alumni_total} alumni${esc(range)}</small></h2>
+    <div class="stats">${tile(pct(c.message, c.total), 'acceptent les messages')}${tile(pct(c.located, c.total), 'visibles sur la carte')}${tile(pct(d.alumni_total - unknown, d.alumni_total), 'domaine renseigné')}</div>
+    <div class="st-grid">
+      <section class="card"><h3>Par domaine d’études</h3>${barList(d.by_field, studyLabel, d.alumni_total)}
+        ${unknown ? `<p class="small muted" style="margin-top:8px">${unknown} alumni n’ont pas encore indiqué leur domaine.</p>` : ''}</section>
+      <section class="card"><h3>Par pays</h3>${barList(d.by_country, null, d.alumni_total)}</section>
+      <section class="card"><h3>Villes les plus représentées</h3>${barList(d.by_city)}</section>
+      <section class="card"><h3>Établissements les plus fréquentés</h3>${barList(d.by_school)}</section>
+      <section class="card"><h3>Formations les plus suivies</h3>${barList(d.by_program)}</section>
+      <section class="card"><h3>Par promotion</h3>${colChart(d.by_year)}</section>
+    </div>
+    <h2 class="st-h">Vie de la communauté</h2>
+    <section class="card"><h3>Inscriptions par mois (12 derniers mois)</h3>${colChart(d.signups, monthLabel)}</section>
+    <div class="stats">${tile(a.messages_30d, 'messages (30 jours)')}${tile(a.conversations, 'conversations')}${tile(a.events_upcoming, 'événements à venir')}
+      ${tile(a.registrations, 'inscriptions aux événements')}${tile(a.offers_published, 'offres publiées')}${tile(a.offers_pending, 'offres à valider')}
+      ${tile(a.news, 'actualités')}${tile(a.reports_open, 'signalements ouverts')}</div>
+    <p class="small muted">Les messages privés ne sont jamais lus : seuls des totaux sont comptés.</p>`;
+}
+
+function csvCell(v) { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; }
+
+async function exportAlumni() {
+  const cols = 'first_name,last_name,graduation_year,country,city,school,program,study_field,email,linkedin,instagram,contact_email,contact_message,contact_chat';
+  let all = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from('profiles').select(cols).eq('status', 'approved').eq('member_type', 'alumni')
+      .order('last_name', { ascending: true }).range(from, from + 999);
+    if (error) return toast(errMsg(error), 'err');
+    all = all.concat(data || []);
+    if (!data || data.length < 1000) break;
+  }
+  const yes = (b) => (b ? 'oui' : 'non');
+  const head = ['Nom', 'Prénom', 'Promotion', 'Pays', 'Ville', 'Établissement', 'Formation', 'Domaine', 'E-mail', 'LinkedIn', 'Instagram', 'Contact e-mail', 'Contact message'];
+  const lines = [head, ...all.map((r) => [r.last_name, r.first_name, r.graduation_year, r.country, r.city, r.school, r.program, studyLabel(r.study_field), r.email, r.linkedin,
+    r.instagram ? '@' + r.instagram : '', yes(r.contact_email), yes(r.contact_message || r.contact_chat)])];
+  download(`alumni-gsjc-${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv;charset=utf-8', '﻿' + lines.map((l) => l.map(csvCell).join(';')).join('\r\n'));
+  toast(`${all.length} alumni exportés.`);
+}
+
+/* ------------------------------------------------------------------ */
 /* Administration : validation des inscriptions                        */
 /* ------------------------------------------------------------------ */
-const TABS = [['pending', 'En attente'], ['approved', 'Validés'], ['rejected', 'Refusés'], ['reports', 'Signalements']];
+const TABS = [['pending', 'En attente'], ['approved', 'Validés'], ['rejected', 'Refusés'], ['offers', 'Offres'], ['reports', 'Signalements']];
 
 async function countOf(filters, table = 'profiles') {
   let q = sb.from(table).select('id', { count: 'exact', head: true });
@@ -1882,12 +2257,13 @@ function setAdminBadge(n) {
 }
 // Pastille « à traiter » : demandes en attente + signalements ouverts.
 async function refreshBadge() {
-  const [pending, reports] = await Promise.all([
+  const [pending, reports, offers] = await Promise.all([
     countOf({ status: 'pending' }),
     countOf({ status: 'open' }, 'reports'),
+    countOf({ status: 'pending' }, 'offers'),
   ]);
-  setAdminBadge(pending + reports);
-  return pending + reports;
+  setAdminBadge(pending + reports + offers);
+  return pending + reports + offers;
 }
 
 async function viewAdmin() {
@@ -1895,6 +2271,7 @@ async function viewAdmin() {
   shell(`
     <div class="page-head"><h1>Validation des inscriptions</h1>
       <button class="btn ghost sm" data-action="refreshAdmin">Actualiser</button></div>
+    ${adminSeg('admin')}
     <div class="stats" id="stats"></div>
     <div id="geoFix"></div>
     <div class="tabs" role="tablist">
@@ -1908,18 +2285,19 @@ async function viewAdmin() {
 }
 
 async function loadStats() {
-  const [pending, alumni, students, rejected, reports] = await Promise.all([
+  const [pending, alumni, students, rejected, reports, offersP] = await Promise.all([
     countOf({ status: 'pending' }),
     countOf({ status: 'approved', member_type: 'alumni' }),
     countOf({ status: 'approved', member_type: 'student' }),
     countOf({ status: 'rejected' }),
     countOf({ status: 'open' }, 'reports'),
+    countOf({ status: 'pending' }, 'offers'),
   ]);
   const box = $('#stats');
   if (!box) return;
-  box.innerHTML = [['En attente', pending], ['Alumni validés', alumni], ['Lycéens validés', students], ['Refusés', rejected], ['Signalements ouverts', reports]]
+  box.innerHTML = [['En attente', pending], ['Alumni validés', alumni], ['Lycéens validés', students], ['Refusés', rejected], ['Signalements ouverts', reports], ['Offres à valider', offersP]]
     .map(([l, n]) => `<div class="stat"><b>${n}</b><span>${l}</span></div>`).join('');
-  setAdminBadge(pending + reports);
+  setAdminBadge(pending + reports + offersP);
   checkPositions();
 }
 
@@ -1928,6 +2306,7 @@ async function loadAdminList() {
   if (!list) return;
   list.innerHTML = '<p class="muted">Chargement…</p>';
   if (adminTab === 'reports') return loadReports();
+  if (adminTab === 'offers') return loadOffersAdmin();
   const { data, error } = await sb.from('profiles').select('*').eq('status', adminTab)
     .order('updated_at', { ascending: adminTab !== 'pending' }).limit(300);
   if (error) { list.innerHTML = `<p class="err">${esc(errMsg(error))}</p>`; return; }
@@ -1938,7 +2317,7 @@ async function loadAdminList() {
 
 function renderAdminList() {
   const list = $('#adminList');
-  if (!list || adminTab === 'reports') return;
+  if (!list || adminTab === 'reports' || adminTab === 'offers') return;
   const q = ($('#adminSearch')?.value || '').trim().toLowerCase();
   const rows = [...adminRows.values()].filter((r) =>
     !q || [r.first_name, r.last_name, r.email, r.school, r.program, r.city, r.country].some((x) => (x || '').toLowerCase().includes(q)));
@@ -2004,6 +2383,32 @@ const actions = {
   refreshAdmin: () => { loadStats(); loadAdminList(); },
   adminTab: (el) => { adminTab = el.dataset.tab; $$('.tabs button').forEach((b) => b.setAttribute('aria-selected', b === el)); loadAdminList(); },
   closeModal: () => closeModal(),
+  newOffer: () => openOfferForm(),
+  openOffer: (el) => openOffer(el.dataset.id),
+  editOffer: (el) => { const o = offerRows.find((x) => String(x.id) === el.dataset.id); if (o) { closeModal(); openOfferForm(o); } },
+  closeOffer: (el) => setOfferStatus(el.dataset.id, 'closed', 'Offre marquée comme pourvue.'),
+  deleteOffer: (el) => confirmDeleteOffer(el.dataset.id),
+  offerType: (el) => { offerType = el.dataset.t; offerMine = false; renderOffers(); },
+  offerMineToggle: () => { offerMine = !offerMine; offerType = ''; renderOffers(); },
+  approveOffer: async (el) => { el.disabled = true; await setOfferStatus(el.dataset.id, 'published', 'Offre publiée.'); },
+  rejectOffer: (el) => {
+    const id = el.dataset.id;
+    const o = offerRows.find((x) => String(x.id) === id);
+    const box = openModal(`
+      <h2>Refuser l’offre « ${esc(o?.title || '')} »</h2>
+      <p class="muted small">Le motif sera visible par son auteur, qui pourra corriger l’offre et la renvoyer.</p>
+      <div class="field" style="margin-top:10px"><textarea id="offReason" maxlength="1000" placeholder="Motif (facultatif)…" aria-label="Motif"></textarea></div>
+      <div class="row end"><button class="btn ghost" data-action="closeModal">Annuler</button><button class="btn danger" id="offRejectOk">Refuser l’offre</button></div>`);
+    $('#offRejectOk', box).addEventListener('click', async (e) => {
+      busy(e.target, true, 'Envoi…');
+      const { error } = await sb.from('offers').update({ status: 'rejected', review_note: $('#offReason', box).value.trim() || null }).eq('id', id);
+      if (error) { busy(e.target, false); return toast(errMsg(error), 'err'); }
+      closeModal(); toast('Offre refusée.');
+      loadOffersAdmin(); loadStats();
+    });
+  },
+  printStats: () => window.print(),
+  exportAlumni: () => exportAlumni(),
   publish: () => openPublish(feedKind),
   openNews: (el) => openNews(el.dataset.id),
   openEvent: (el) => openEvent(el.dataset.id),
