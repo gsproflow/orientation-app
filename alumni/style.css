@@ -418,3 +418,10 @@ details.past[open] { display: grid; gap: 12px; }
 .hint.good { color: var(--ok); font-weight: 600; }
 .hint.bad { color: var(--danger); font-weight: 600; }
 .kv .ok-line, .kv .no-line { width: auto; }
+
+/* ---------- Fond de carte intégré ---------- */
+.map { background: #d9e6f2; }
+.leaflet-tooltip.country-tip { font-weight: 600; font-size: .85rem; padding: .2rem .55rem; }
+
+/* La feuille de style de Leaflet passe après la nôtre : on renforce pour garder l'océan bleu */
+.map.leaflet-container { background: #d9e6f2; }

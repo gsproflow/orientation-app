@@ -1365,6 +1365,24 @@ let mapRows = [];
 let mapLibs = null;
 let geoTodo = [];
 
+// Fond de carte intégré à l'application (Natural Earth, domaine public) : aucune image n'est demandée
+// à un serveur extérieur. Le Maroc y figure avec son Sahara (voir tools/build-world-map.js).
+let worldData = null;
+async function addBaseMap(map) {
+  window.L.control.attribution({ prefix: false }).addAttribution('Fond de carte : Natural Earth').addTo(map);
+  try {
+    if (!worldData) worldData = await (await fetch('data/world.json')).json();
+  } catch { return; }
+  if (mapObj !== map) return; // la page a changé pendant le chargement
+  window.L.geoJSON(worldData, {
+    style: { fillColor: '#f3f0e6', fillOpacity: 1, color: '#b7b09c', weight: 0.7 },
+    onEachFeature: (f, layer) => {
+      layer.bindTooltip(f.properties.n, { sticky: true, direction: 'top', className: 'country-tip' });
+      layer.on('click', (e) => layer.openTooltip(e.latlng));
+    },
+  }).addTo(map).bringToBack();
+}
+
 function destroyMap() {
   if (mapObj) {
     try { mapObj.stop(); if (cluster) cluster.clearLayers(); mapObj.off(); mapObj.remove(); } catch { /* ignoré */ }
@@ -1416,11 +1434,8 @@ async function viewMap() {
   const years = [...new Set(dirRows.map((r) => r.graduation_year).filter(Boolean))].sort((a, b) => b - a);
   $('#mapYear').insertAdjacentHTML('beforeend', years.map((y) => `<option value="${esc(y)}">Promo ${esc(y)}</option>`).join(''));
 
-  mapObj = window.L.map('map', { worldCopyJump: true, minZoom: 2, zoomSnap: 0.5, zoomAnimation: false, fadeAnimation: false, markerZoomAnimation: false }).setView([28, 10], 2);
-  window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 18,
-    attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>',
-  }).addTo(mapObj);
+  mapObj = window.L.map('map', { minZoom: 2, maxZoom: 7, zoomSnap: 0.5, preferCanvas: true, attributionControl: false, maxBounds: [[-58, -190], [84, 190]], maxBoundsViscosity: 1, zoomAnimation: false, fadeAnimation: false, markerZoomAnimation: false }).setView([28, 10], 2);
+  addBaseMap(mapObj);
   cluster = window.L.markerClusterGroup({ showCoverageOnHover: false, maxClusterRadius: 45, animate: false, animateAddingMarkers: false });
   mapObj.addLayer(cluster);
 
@@ -2605,7 +2620,7 @@ function openPrivacy() {
       <h3>Qui peut les voir ?</h3>
       <p><b>Uniquement</b> les membres de la communauté validés par l’établissement (anciens élèves, lycéens, personnels) et l’administration du GSJC (CPE, chargée d’orientation, direction). Vos données ne sont ni publiques, ni référencées sur internet, ni vendues, ni utilisées à des fins publicitaires.</p>
       <p>Vous décidez de ce qui est visible : photo, pays et ville, établissement et formation, réseaux sociaux, adresse e-mail. Vous choisissez aussi les moyens par lesquels on peut vous contacter. L’administration peut vérifier ces informations.</p>
-      <p>La carte n’affiche que la <b>ville</b> (jamais une adresse) des alumni qui ont choisi d’afficher leur localisation. Les images du fond de carte sont fournies par OpenStreetMap : votre navigateur contacte leurs serveurs pour les télécharger, sans leur transmettre vos informations de profil.</p>
+      <p>La carte n’affiche que la <b>ville</b> (jamais une adresse) des alumni qui ont choisi d’afficher leur localisation. Le fond de carte est intégré à l’application : aucun serveur de cartes extérieur n’est contacté.</p>
       <p><b>Vos messages entre membres sont privés</b> : seuls les deux participants peuvent les lire. L’administration ne peut consulter une conversation que si l’un des participants la signale, et uniquement cette conversation, afin de protéger les élèves.</p>
       <h3>Base légale et durée</h3>
       <p>Vos données sont traitées avec votre consentement, que vous pouvez retirer à tout moment. Elles sont conservées tant que votre compte est actif. Pour les élèves mineurs, l’inscription suppose l’accord de leurs représentants légaux.</p>
