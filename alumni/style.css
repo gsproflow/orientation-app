@@ -413,3 +413,8 @@ details.past[open] { display: grid; gap: 12px; }
   .card, .stat { box-shadow: none; border: 1px solid #ccc; break-inside: avoid; }
   .st-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* ---------- Aide de saisie de l'adresse e-mail ---------- */
+.hint.good { color: var(--ok); font-weight: 600; }
+.hint.bad { color: var(--danger); font-weight: 600; }
+.kv .ok-line, .kv .no-line { width: auto; }

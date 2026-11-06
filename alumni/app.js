@@ -1,7 +1,7 @@
 // Alumni GSJC Rabat : étape 1
 // Inscription, profil + photo obligatoires, validation par l'administration.
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, PRIVACY_CONTACT, STUDENT_EMAIL_DOMAIN } from './config.js';
+import { SUPABASE_URL, SUPABASE_KEY, PRIVACY_CONTACT, SCHOOL_EMAIL_DOMAIN } from './config.js';
 
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
@@ -25,6 +25,28 @@ const STUDY_FIELDS = {
   arts: 'Arts, design & architecture', comms: 'Communication & journalisme', education: 'Éducation & enseignement', other: 'Autre domaine',
 };
 const studyLabel = (k) => STUDY_FIELDS[k] || 'Non renseigné';
+
+// Règle des adresses e-mail : même logique que la base de données (qui fait foi).
+const SCHOOL = SCHOOL_EMAIL_DOMAIN.toLowerCase();
+const STUDENT_RE = new RegExp('^[a-z]+(-[a-z]+)*\\.[a-z]+(-[a-z]+)*[0-9]{0,3}@' + SCHOOL.replace(/\./g, '\\.') + '$');
+const EX_STUDENT = `a.boulami@${SCHOOL}`;
+function emailError(type, raw) {
+  const em = (raw || '').trim().toLowerCase();
+  const school = em.endsWith('@' + SCHOOL);
+  if (type === 'student') {
+    if (STUDENT_RE.test(em)) return '';
+    return school
+      ? `Cette adresse ne respecte pas le format prenom.nom@${SCHOOL} (exemple : ${EX_STUDENT}).`
+      : `Les lycéens s’inscrivent uniquement avec leur adresse scolaire : prenom.nom@${SCHOOL} (exemple : ${EX_STUDENT}).`;
+  }
+  if (type === 'staff') return school && /^[^@\s]+@/.test(em) ? '' : `Le personnel s’inscrit avec son adresse professionnelle @${SCHOOL}.`;
+  return school ? `Les adresses @${SCHOOL} sont réservées aux lycéens et au personnel. Les anciens élèves utilisent une adresse personnelle.` : '';
+}
+const TYPE_RULE = {
+  student: `Lycéens : inscription uniquement avec votre adresse scolaire prenom.nom@${SCHOOL} (exemple : ${EX_STUDENT}). Les adresses personnelles ne sont pas acceptées.`,
+  staff: `Personnel : utilisez votre adresse professionnelle @${SCHOOL}.`,
+  alumni: `Anciens élèves : utilisez une adresse personnelle (les adresses @${SCHOOL} ne sont pas acceptées).`,
+};
 const fmtDate = (d) => new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
 const fmtDateTime = (d) =>
   new Date(d).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -47,6 +69,7 @@ function errMsg(err) {
     [/rate limit|too many|security purposes/i, 'Trop de tentatives. Réessayez dans quelques minutes.'],
     [/at least \d+ characters/i, 'Le mot de passe doit contenir au moins 8 caractères.'],
     [/different from the old password/i, 'Le nouveau mot de passe doit être différent de l’ancien.'],
+    [/Database error saving new user|non conforme/i, `Inscription refusée : l’adresse e-mail ne respecte pas la règle de votre type de compte (lycéens : prenom.nom@${SCHOOL_EMAIL_DOMAIN} ; personnel : @${SCHOOL_EMAIL_DOMAIN} ; anciens élèves : adresse personnelle).`],
     [/Failed to fetch|NetworkError|Load failed/i, 'Connexion impossible. Vérifiez votre connexion internet.'],
     [/row-level security|permission denied/i, 'Action non autorisée.'],
     [/mime type|not supported/i, 'Format de fichier non accepté (JPEG, PNG ou WebP).'],
@@ -54,7 +77,7 @@ function errMsg(err) {
   ];
   for (const [re, fr] of map) if (re.test(m)) return fr;
   // Messages métier déjà en français renvoyés par la base (schema.sql).
-  if (/^(Profil incomplet|Modification non autorisée|Changement de statut|Le type de compte|Trop de messages|Cette personne|Limite atteinte|Destinataire|Vous ne pouvez pas|Accès réservé|Conversation introuvable)/.test(m)) return m;
+  if (/^(Profil incomplet|Modification non autorisée|Changement de statut|Le type de compte|Trop de messages|Cette personne|Limite atteinte|Destinataire|Vous ne pouvez pas|Accès réservé|Conversation introuvable|Ce type de compte)/.test(m)) return m;
   return 'Une erreur est survenue. Réessayez, ou contactez l’administration si cela continue. (' + m + ')';
 }
 
@@ -302,7 +325,8 @@ function viewAuth(mode = 'login', prefillType = 'alumni') {
           </div>
           <p class="hint" id="typeHint"></p>
         </div>
-        <div class="field"><label for="email">Adresse e-mail</label><input id="email" name="email" type="email" autocomplete="email" required></div>
+        <div class="field"><label for="email">Adresse e-mail</label><input id="email" name="email" type="email" autocomplete="email" autocapitalize="none" spellcheck="false" required>
+          <p class="hint" id="emailHint" aria-live="polite"></p></div>
         <div class="field"><label for="password">Mot de passe <span class="hint">(8 caractères minimum)</span></label><input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required></div>
         <div class="field"><label for="password2">Confirmez le mot de passe</label><input id="password2" name="password2" type="password" autocomplete="new-password" required></div>
         <div class="info-banner small">À l’étape suivante, vous compléterez votre profil. Votre inscription sera ensuite <b>vérifiée par l’administration</b> du groupe scolaire avant d’être activée.</div>
@@ -320,19 +344,23 @@ function viewAuth(mode = 'login', prefillType = 'alumni') {
       const f = new FormData(e.target);
       const btn = $('button[type=submit]', e.target);
       busy(btn, true, 'Connexion…');
-      const { error } = await sb.auth.signInWithPassword({ email: f.get('email').trim(), password: f.get('password') });
+      const { error } = await sb.auth.signInWithPassword({ email: f.get('email').trim().toLowerCase(), password: f.get('password') });
       busy(btn, false);
       if (error) err(errMsg(error));
     });
   } else {
     const hint = () => {
       const t = $('input[name=member_type]:checked').value;
-      $('#typeHint').textContent =
-        t === 'student' ? 'Lycéens : utilisez votre adresse e-mail de l’école.'
-        : t === 'alumni' ? 'Anciens élèves : utilisez l’adresse e-mail où vous recevez l’invitation.'
-        : 'Personnel du groupe scolaire.';
+      $('#typeHint').textContent = TYPE_RULE[t];
+      const v = $('#email').value.trim();
+      const eh = $('#emailHint');
+      if (!v) { eh.textContent = ''; eh.className = 'hint'; return; }
+      const e = emailError(t, v);
+      eh.textContent = e ? '⚠ ' + e : '✓ Adresse conforme';
+      eh.className = 'hint ' + (e ? 'bad' : 'good');
     };
     $$('input[name=member_type]').forEach((r) => r.addEventListener('change', hint));
+    $('#email').addEventListener('input', hint);
     hint();
 
     $('#signupForm').addEventListener('submit', async (e) => {
@@ -342,9 +370,8 @@ function viewAuth(mode = 'login', prefillType = 'alumni') {
       const email = f.get('email').trim().toLowerCase();
       const type = f.get('member_type');
       if (!/^\S+@\S+\.\S+$/.test(email)) return err('Adresse e-mail invalide.');
-      if (type === 'student' && STUDENT_EMAIL_DOMAIN && !email.endsWith('@' + STUDENT_EMAIL_DOMAIN)) {
-        return err(`Les lycéens doivent utiliser leur adresse e-mail de l’école (@${STUDENT_EMAIL_DOMAIN}).`);
-      }
+      const rule = emailError(type, email);
+      if (rule) return err(rule);
       if (f.get('password').length < 8) return err('Le mot de passe doit contenir au moins 8 caractères.');
       if (f.get('password') !== f.get('password2')) return err('Les deux mots de passe ne sont pas identiques.');
       const btn = $('button[type=submit]', e.target);
@@ -454,7 +481,7 @@ function viewForm() {
       <section class="card">
         <h2 class="section-title">Vous êtes <span class="req">*</span></h2>
         <div class="choices">
-          ${['alumni', 'student', 'staff'].map((t) => `<label class="choice"><input type="radio" name="member_type" value="${t}" ${p.member_type === t ? 'checked' : ''} ${lockType && p.member_type !== t ? 'disabled' : ''}><span>${TYPE_LABEL[t]}</span></label>`).join('')}
+          ${['alumni', 'student', 'staff'].map((t) => `<label class="choice"><input type="radio" name="member_type" value="${t}" ${p.member_type === t ? 'checked' : ''} ${(lockType || emailError(t, p.email)) && p.member_type !== t ? 'disabled' : ''}><span>${TYPE_LABEL[t]}</span></label>`).join('')}
         </div>
       </section>
 
@@ -2328,6 +2355,17 @@ function renderAdminList() {
   list.innerHTML = rows.map(adminCard).join('');
 }
 
+// Pour un lycéen : l'adresse prenom.nom@ correspond-elle au nom indiqué ? (aide à la validation, non bloquant)
+function emailNameCheck(r) {
+  if (r.member_type !== 'student' || !r.first_name || !r.last_name) return null;
+  const m = /^([a-z-]+)\.([a-z-]+?)[0-9]*@/.exec((r.email || '').toLowerCase());
+  if (!m) return null;
+  const key = (t) => fold(t).replace(/[^a-z]/g, '');
+  const fn = key(r.first_name), ln = key(r.last_name);
+  const ef = m[1].replace(/-/g, ''), el = m[2].replace(/-/g, '');
+  return (fn.startsWith(ef) || ef.startsWith(fn)) && (ln.startsWith(el) || el.startsWith(ln));
+}
+
 function adminCard(r) {
   const name = `${r.first_name || ''} ${r.last_name || ''}`.trim() || r.email;
   const url = urlCache.get(r.photo_path)?.url || null;
@@ -2343,6 +2381,8 @@ function adminCard(r) {
     if (links.length) kv.push(['Réseaux', links.join(' · ')]);
   } else if (r.member_type === 'student') {
     kv.push(['Projet', esc(r.target_program || '')]);
+    const chk = emailNameCheck(r);
+    if (chk !== null) kv.push(['Adresse', chk ? '<span class="ok-line">✓ correspond au nom indiqué</span>' : '<span class="no-line">⚠ ne correspond pas au nom indiqué : à vérifier</span>']);
   } else {
     kv.push(['Fonction', esc(r.job_title || '')]);
   }

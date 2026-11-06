@@ -144,6 +144,71 @@ begin
 end;
 $$;
 
+-- Règle des adresses e-mail, appliquée par la base (impossible à contourner depuis l'écran) :
+--   lycéens            : prenom.nom@gsjc.ma (le prénom peut se réduire à une ou deux lettres,
+--                        ex. a.boulami@gsjc.ma ; tirets autorisés ; jusqu'à 3 chiffres en fin de nom)
+--   personnel          : une adresse @gsjc.ma
+--   anciens élèves     : une adresse personnelle (les adresses @gsjc.ma leur sont fermées)
+-- Pour changer de domaine, remplacer « gsjc\.ma » ci-dessous (et SCHOOL_EMAIL_DOMAIN dans config.js).
+create or replace function public.email_ok_for_type(em text, mt text)
+returns boolean
+language sql immutable
+as $$
+  select case
+    when mt = 'student' then lower(trim(coalesce(em, ''))) ~ '^[a-z]+(-[a-z]+)*\.[a-z]+(-[a-z]+)*[0-9]{0,3}@gsjc\.ma$'
+    when mt = 'staff'   then lower(trim(coalesce(em, ''))) ~ '^[^@[:space:]]+@gsjc\.ma$'
+    else                     lower(trim(coalesce(em, ''))) !~ '@gsjc\.ma$'
+  end;
+$$;
+
+-- Refuse la création d'un compte dont l'adresse ne respecte pas la règle de son type.
+create or replace function public.enforce_signup_rules()
+returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  mt text := coalesce(new.raw_user_meta_data->>'member_type', 'alumni');
+begin
+  if mt not in ('alumni','student','staff') then mt := 'alumni'; end if;
+  if not public.email_ok_for_type(new.email, mt) then
+    raise exception 'Adresse e-mail non conforme pour ce type de compte';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_signup_rules on auth.users;
+create trigger enforce_signup_rules
+  before insert on auth.users
+  for each row execute function public.enforce_signup_rules();
+
+-- Même règle si l'adresse est modifiée plus tard ; le profil reste synchronisé.
+create or replace function public.enforce_email_change()
+returns trigger
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  mt text;
+begin
+  if new.email is not distinct from old.email then
+    return new;
+  end if;
+  select member_type into mt from public.profiles where id = new.id;
+  if mt is not null and not public.email_ok_for_type(new.email, mt) then
+    raise exception 'Adresse e-mail non conforme pour ce type de compte';
+  end if;
+  update public.profiles set email = lower(trim(new.email)) where id = new.id;
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_email_change on auth.users;
+create trigger enforce_email_change
+  before update of email on auth.users
+  for each row execute function public.enforce_email_change();
+
 -- Crée automatiquement un profil vide à chaque nouveau compte.
 create or replace function public.handle_new_user()
 returns trigger
@@ -203,6 +268,10 @@ begin
 
   if old.status = 'approved' and new.member_type <> old.member_type then
     raise exception 'Le type de compte ne peut plus être modifié';
+  end if;
+
+  if new.member_type <> old.member_type and not public.email_ok_for_type(new.email, new.member_type) then
+    raise exception 'Ce type de compte n''est pas compatible avec votre adresse e-mail';
   end if;
 
   if new.status in ('pending','approved') then

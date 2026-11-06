@@ -10,7 +10,10 @@ export const SUPABASE_KEY = 'sb_publishable_rkD1HiBAzwZvMTabpOmRqQ_jUTiTOH_';
 // pour exercer ses droits (à compléter avec l'adresse officielle).
 export const PRIVACY_CONTACT = '';
 
-// Optionnel : domaine des adresses e-mail des élèves, par exemple 'gsjc.ma'.
-// S'il est renseigné, les lycéens doivent s'inscrire avec une adresse de ce domaine.
-// (Simple aide à la saisie : la vraie vérification reste la validation par le CPE.)
-export const STUDENT_EMAIL_DOMAIN = '';
+// Domaine des adresses e-mail de l'établissement (lycéens et personnel).
+// Règles : lycéens = prenom.nom@<domaine> (le prénom peut se réduire à une ou deux lettres,
+// ex. a.boulami@gsjc.ma) ; personnel = une adresse @<domaine> ; anciens élèves = adresse
+// personnelle (les adresses @<domaine> leur sont fermées).
+// La règle est APPLIQUÉE PAR LA BASE DE DONNÉES (fonction email_ok_for_type dans schema.sql) :
+// si vous changez de domaine, changez-le aussi dans ce fichier SQL.
+export const SCHOOL_EMAIL_DOMAIN = 'gsjc.ma';
