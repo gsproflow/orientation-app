@@ -142,19 +142,34 @@ async function loadProfile() {
 /* Squelette de page                                                   */
 /* ------------------------------------------------------------------ */
 function shell(inner, { wide = false } = {}) {
+  destroyMap();
   const approved = profile?.status === 'approved';
   const isAdmin = approved && profile.role === 'admin';
   const h = location.hash || '#/';
   const act = (r) => (h === r || (r !== '#/' && h.startsWith(r + '/')) ? 'active' : '');
+  const msgB = (id) => `<span ${id ? 'id="navMsgBadge" ' : ''}class="badge js-msg-badge" hidden></span>`;
+  const admB = (id) => `<span ${id ? 'id="navBadge" ' : ''}class="badge js-admin-badge" hidden></span>`;
   const nav = session
-    ? `<nav class="nav" aria-label="Navigation principale">
-        ${approved ? `<a href="#/" class="${act('#/')}">Accueil</a><a href="#/annuaire" class="${act('#/annuaire')}">Annuaire</a><a href="#/messages" class="${act('#/messages')}">Messages <span id="navMsgBadge" class="badge" hidden></span></a>` : ''}
-        ${isAdmin ? `<a href="#/admin" class="${act('#/admin')}">Administration <span id="navBadge" class="badge" hidden></span></a>` : ''}
-        ${approved ? `<a href="#/profil" class="${act('#/profil')}">Mon profil</a>` : ''}
-        <button class="linkbtn" data-action="privacy">Vie privée</button>
+    ? `<nav class="nav" aria-label="Menu">
+        ${approved ? `<a class="dlink ${act('#/')}" href="#/">Accueil</a>
+          <a class="dlink ${act('#/annuaire')}" href="#/annuaire">Annuaire</a>
+          <a class="dlink ${act('#/carte')}" href="#/carte">Carte</a>
+          <a class="dlink ${act('#/messages')}" href="#/messages">Messages ${msgB(true)}</a>` : ''}
+        ${isAdmin ? `<a class="dlink ${act('#/admin')}" href="#/admin">Administration ${admB(true)}</a>` : ''}
+        ${approved ? `<a class="dlink ${act('#/profil')}" href="#/profil">Mon profil</a>` : ''}
+        <button class="linkbtn ${approved ? 'dlink' : ''}" data-action="privacy">Vie privée</button>
         <button class="linkbtn" data-action="logout">Déconnexion</button>
       </nav>`
     : `<nav class="nav"><button class="linkbtn" data-action="privacy">Vie privée</button></nav>`;
+  const tab = (href, icon, label, badge = '') =>
+    `<a class="tab ${act(href)}" href="${href}"><span class="ti" aria-hidden="true">${icon}</span><span>${label}</span>${badge}</a>`;
+  const tabbar = approved
+    ? `<nav class="tabbar" aria-label="Navigation principale">
+        ${tab('#/', '🏠', 'Accueil')}${tab('#/annuaire', '👥', 'Annuaire')}${tab('#/carte', '🗺️', 'Carte')}
+        ${tab('#/messages', '💬', 'Messages', msgB(false))}
+        ${isAdmin ? tab('#/admin', '⚙️', 'Admin', admB(false)) : ''}${tab('#/profil', '👤', 'Profil')}
+      </nav>` : '';
+  document.body.classList.toggle('has-tabbar', approved);
   app.innerHTML = `
     <header class="topbar"><div class="topbar-in">
       <a class="brand" href="#/"><img src="icons/monogram.png" alt=""><span>Alumni <b>GSJC</b> Rabat</span></a>
@@ -162,7 +177,8 @@ function shell(inner, { wide = false } = {}) {
     </div></header>
     <main class="main ${wide ? 'wide' : ''}" id="main">${inner}</main>
     <footer class="foot">© Groupe Scolaire Jacques Chirac · Rabat ·
-      <button class="linkbtn" data-action="privacy">Protection des données</button></footer>`;
+      <button class="linkbtn" data-action="privacy">Protection des données</button></footer>
+    ${tabbar}`;
   window.scrollTo(0, 0);
   setUnread(unread);
   setAdminBadge(adminBadgeN);
@@ -219,6 +235,7 @@ function route() {
   if (s === 'rejected') return viewRejected();
   if (h.startsWith('#/messages')) return viewMessages(h.split('/')[2]);
   if (h === '#/annuaire') return viewDirectory();
+  if (h === '#/carte') return viewMap();
   if (h === '#/admin' && profile.role === 'admin') return viewAdmin();
   return viewHome();
 }
@@ -396,11 +413,6 @@ function viewNewPassword() {
 /* ------------------------------------------------------------------ */
 /* Formulaire de profil                                                */
 /* ------------------------------------------------------------------ */
-const COUNTRIES = ['Maroc', 'France', 'Canada', 'Espagne', 'Royaume-Uni', 'États-Unis', 'Allemagne', 'Belgique', 'Suisse',
-  'Pays-Bas', 'Italie', 'Irlande', 'Portugal', 'Émirats arabes unis', 'Qatar', 'Arabie saoudite', 'Sénégal', 'Côte d’Ivoire',
-  'Tunisie', 'Algérie', 'Chine', 'Japon', 'Corée du Sud', 'Australie', 'Turquie', 'Luxembourg', 'Suède', 'Norvège', 'Danemark',
-  'Pologne', 'Roumanie', 'Brésil', 'Mexique', 'Inde', 'Singapour', 'Hong Kong'];
-
 function viewForm() {
   currentView = 'form';
   pendingPhoto = null;
@@ -461,9 +473,11 @@ function viewForm() {
           <div class="field" data-field="graduation_year"><label for="graduation_year">Année du bac / diplôme <span class="req">*</span></label>
             <select id="graduation_year" name="graduation_year"><option value="">Choisir…</option>${years.map((y) => `<option value="${y}" ${p.graduation_year === y ? 'selected' : ''}>${y}</option>`).join('')}</select><p class="err" data-err="graduation_year"></p></div>
           <div class="field" data-field="country"><label for="country">Pays d’études <span class="req">*</span></label>
-            <input id="country" name="country" type="text" maxlength="80" list="countries" value="${v('country')}"><p class="err" data-err="country"></p>
-            <datalist id="countries">${COUNTRIES.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></div>
-          <div class="field" data-field="city"><label for="city">Ville <span class="req">*</span></label><input id="city" name="city" type="text" maxlength="80" value="${v('city')}"><p class="err" data-err="city"></p></div>
+            <select id="country" name="country"><option value="">Choisir…</option></select><p class="err" data-err="country"></p></div>
+          <div class="field" data-field="city"><label for="city">Ville <span class="req">*</span></label>
+            <input id="city" name="city" type="text" maxlength="80" list="cityList" autocomplete="off" value="${v('city')}">
+            <datalist id="cityList"></datalist>
+            <p class="hint" id="cityHint"></p><p class="err" data-err="city"></p></div>
           <div class="field" data-field="school"><label for="school">Université / école <span class="req">*</span></label><input id="school" name="school" type="text" maxlength="150" value="${v('school')}"><p class="err" data-err="school"></p></div>
         </div>
         <div class="field" data-field="program"><label for="program">Formation suivie <span class="req">*</span></label><input id="program" name="program" type="text" maxlength="150" placeholder="Ex. : Licence d’économie, Classe préparatoire MPSI…" value="${v('program')}"><p class="err" data-err="program"></p></div>
@@ -540,6 +554,8 @@ function viewForm() {
   $$('input[name=member_type]', form).forEach((r) => r.addEventListener('change', applyType));
   applyType();
 
+  initGeoFields(form, p);
+
   // Aperçu de la photo actuelle
   photoUrl(p.photo_path).then((u) => { if (u && !pendingPhoto) $('#photoPreview').innerHTML = avatarHtml(p, u, 'lg'); });
 
@@ -587,6 +603,7 @@ function readForm(form) {
     last_name: g('last_name'),
     graduation_year: null, country: null, city: null, school: null, program: null,
     instagram: null, linkedin: null, class_level: null, target_program: null, job_title: null,
+    country_code: null, lat: null, lng: null,
     contact_email: fd.has('contact_email'),
     contact_message: fd.has('contact_message'),
     contact_chat: fd.has('contact_message'), // message et chat forment un seul système
@@ -599,6 +616,7 @@ function readForm(form) {
   if (t === 'alumni') {
     out.graduation_year = parseInt(g('graduation_year'), 10) || null;
     out.country = g('country') || null;
+    out.country_code = form.querySelector('#country')?.selectedOptions[0]?.dataset.code || null;
     out.city = g('city') || null;
     out.school = g('school') || null;
     out.program = g('program') || null;
@@ -620,6 +638,7 @@ function validateProfile(v, consent) {
   if (!profile.photo_path && !pendingPhoto) e.push(['photo', 'Une photo est obligatoire.']);
   if (v.member_type === 'alumni') {
     ['graduation_year', 'country', 'city', 'school', 'program'].forEach((k) => need(k));
+    if (v.country && !v.country_code) e.push(['country', 'Choisissez un pays dans la liste.']);
     if (!v.linkedin && !v.instagram) e.push(['social', 'Renseignez au moins un réseau social (LinkedIn ou Instagram).']);
     if (v.linkedin && !/^https:\/\/([a-z0-9-]+\.)?linkedin\.com\/\S+$/i.test(v.linkedin)) e.push(['linkedin', 'Lien LinkedIn invalide (ex. linkedin.com/in/votre-nom).']);
     if (v.instagram && !/^[A-Za-z0-9._]{1,30}$/.test(v.instagram)) e.push(['instagram', 'Identifiant Instagram invalide.']);
@@ -659,6 +678,11 @@ async function submitProfile(ev) {
 
   const btn = $('#saveBtn');
   busy(btn, true, 'Envoi en cours…');
+  if (out.member_type === 'alumni') {
+    // Position sur la carte : calculée ici à partir de la liste de villes, sans service extérieur.
+    const pos = await resolvePosition(out.country_code, out.city);
+    if (pos) { out.city = pos.n; out.lat = pos.la; out.lng = pos.ln; }
+  }
   const uid = session.user.id;
   const oldPhoto = profile.photo_path;
   let newPath = null;
@@ -769,15 +793,15 @@ async function viewHome() {
     </section>
     <section class="card">
       <h2>Votre profil est validé</h2>
-      <p>Merci d’avoir rejoint la communauté du GSJC. Parcourez l’annuaire pour trouver un ancien élève par pays, ville, école ou formation. Arrivent bientôt :</p>
+      <p>Merci d’avoir rejoint la communauté du GSJC. Trouvez un ancien élève dans l’annuaire ou sur la carte du monde, puis écrivez-lui directement. Arrivent bientôt :</p>
       <ul class="soon" style="margin-top:10px">
-        <li>La carte du monde des alumni</li>
-        <li>La messagerie et le chat entre membres</li>
-        <li>Les événements, les actualités et les offres de stage</li>
+        <li>Les événements et les actualités de l’établissement</li>
+        <li>Les offres de stage et d’emploi</li>
       </ul>
     </section>
     <div class="row">
       <a class="btn" href="#/annuaire">Ouvrir l’annuaire</a>
+      <a class="btn" href="#/carte">Voir la carte</a>
       <a class="btn ghost" href="#/profil">Modifier mon profil</a>
       ${isAdmin ? '<a class="btn ghost" href="#/admin">Ouvrir l’administration</a>' : ''}
     </div>`);
@@ -875,9 +899,10 @@ function memberCard(r) {
   </article>`;
 }
 
-function openMember(id) {
+async function openMember(id) {
   const r = dirRows.find((x) => x.id === id);
   if (!r) return;
+  await photoUrl(r.photo_path);
   const url = urlCache.get(r.photo_path)?.url || null;
   const name = `${r.first_name || ''} ${r.last_name || ''}`.trim();
   const kv = [];
@@ -919,8 +944,7 @@ let convSeen = new Set();
 
 function setUnread(n) {
   unread = Number(n) || 0;
-  const b = $('#navMsgBadge');
-  if (b) { b.textContent = unread; b.hidden = unread === 0; }
+  $$('.js-msg-badge').forEach((b) => { b.textContent = unread; b.hidden = unread === 0; });
   const h = $('#homeUnread');
   if (h) {
     h.innerHTML = unread
@@ -1207,6 +1231,216 @@ async function loadReports() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Villes, pays et carte du monde                                      */
+/* ------------------------------------------------------------------ */
+// Les villes viennent de fichiers locaux (data/cities/XX.json, base GeoNames) :
+// aucune adresse n'est envoyée à un service de géolocalisation.
+const geoKey = (s) => fold(s).replace(/[^a-z0-9]+/g, ' ').trim();
+let countriesCache = null;
+const cityCache = new Map();
+
+async function loadCountries() {
+  if (!countriesCache) {
+    try { countriesCache = await (await fetch('data/countries.json')).json(); } catch { return []; }
+  }
+  return countriesCache;
+}
+async function loadCities(code) {
+  if (!code) return [];
+  if (!cityCache.has(code)) {
+    let rows = [];
+    try { const r = await fetch(`data/cities/${code}.json`); if (r.ok) rows = await r.json(); } catch { /* pas de ville pour ce pays */ }
+    cityCache.set(code, rows.map(([n, la, ln]) => ({ n, la, ln, k: geoKey(n) })));
+  }
+  return cityCache.get(code);
+}
+async function resolvePosition(code, name) {
+  const rows = await loadCities(code);
+  const k = geoKey(name);
+  return rows.find((r) => r.k === k) || null;
+}
+function suggestCities(rows, q, limit) {
+  if (!q) return rows.slice(0, limit); // les plus peuplées d'abord
+  const starts = rows.filter((r) => r.k.startsWith(q));
+  const has = rows.filter((r) => !r.k.startsWith(q) && r.k.includes(q));
+  return starts.concat(has).slice(0, limit);
+}
+
+async function initGeoFields(form, p) {
+  const sel = $('#country', form);
+  const city = $('#city', form);
+  const list = $('#cityList', form);
+  const hint = $('#cityHint', form);
+  if (!sel || !city) return;
+  const countries = await loadCountries();
+  if (!$('#country')) return; // la page a changé entre-temps
+  const preset = countries.find(([, n]) => geoKey(n) === geoKey(p.country || ''));
+  sel.insertAdjacentHTML('beforeend', countries.map(([c, n]) =>
+    `<option value="${esc(n)}" data-code="${esc(c)}" ${preset && preset[0] === c ? 'selected' : ''}>${esc(n)}</option>`).join(''));
+  if (p.country && !preset) {
+    sel.insertAdjacentHTML('beforeend', `<option value="${esc(p.country)}" selected>${esc(p.country)} (à confirmer)</option>`);
+  }
+  const code = () => sel.selectedOptions[0]?.dataset.code || '';
+  const refresh = async () => {
+    const c = code();
+    const rows = await loadCities(c);
+    if (code() !== c || !$('#city')) return;
+    const q = geoKey(city.value);
+    list.innerHTML = suggestCities(rows, q, 15).map((r) => `<option value="${esc(r.n)}">`).join('');
+    if (!c) hint.textContent = 'Choisissez d’abord le pays.';
+    else if (!q) hint.textContent = 'Commencez à taper pour voir les villes proposées.';
+    else if (rows.some((r) => r.k === q)) hint.textContent = '✓ Ville reconnue : vous apparaîtrez sur la carte.';
+    else hint.textContent = '⚠ Ville non reconnue. Choisissez la ville proposée la plus proche pour apparaître sur la carte (vous resterez visible dans l’annuaire).';
+  };
+  sel.addEventListener('change', refresh);
+  city.addEventListener('input', refresh);
+  refresh();
+}
+
+let mapObj = null;
+let cluster = null;
+let mapPts = [];
+let mapRows = [];
+let mapLibs = null;
+let geoTodo = [];
+
+function destroyMap() {
+  if (mapObj) {
+    try { mapObj.stop(); if (cluster) cluster.clearLayers(); mapObj.off(); mapObj.remove(); } catch { /* ignoré */ }
+  }
+  mapObj = null; cluster = null; mapPts = []; mapRows = [];
+}
+
+function loadMapLibs() {
+  if (window.L && window.L.markerClusterGroup) return Promise.resolve();
+  if (!mapLibs) {
+    mapLibs = new Promise((resolve, reject) => {
+      ['vendor/leaflet/leaflet.css', 'vendor/markercluster/MarkerCluster.css', 'vendor/markercluster/MarkerCluster.Default.css']
+        .forEach((href) => { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = href; document.head.appendChild(l); });
+      const add = (src) => new Promise((ok, ko) => {
+        const sc = document.createElement('script'); sc.src = src; sc.onload = ok; sc.onerror = () => ko(new Error('script')); document.head.appendChild(sc);
+      });
+      add('vendor/leaflet/leaflet.js').then(() => add('vendor/markercluster/leaflet.markercluster.js'))
+        .then(resolve, (e) => { mapLibs = null; reject(e); });
+    });
+  }
+  return mapLibs;
+}
+
+async function viewMap() {
+  currentView = 'map';
+  shell(`
+    <div class="page-head tight"><h1>Carte des alumni</h1></div>
+    <p class="small muted" id="mapCount">Chargement de la carte…</p>
+    <div id="mapChips" class="chips scroll"></div>
+    <details class="card filters-d" ${window.innerWidth >= 720 ? 'open' : ''}>
+      <summary>🔍 Filtres</summary>
+      <div class="grid2" style="margin-top:10px">
+        <div class="field"><label class="sr" for="mapYear">Promotion</label><select id="mapYear"><option value="">Toutes les promotions</option></select></div>
+        <div class="field"><label class="sr" for="mapQ">Filtrer</label><input type="search" id="mapQ" placeholder="Nom, école, formation…" autocomplete="off"></div>
+      </div>
+    </details>
+    <div id="map" class="map" role="application" aria-label="Carte du monde des alumni"></div>
+    <p class="small muted" style="margin-top:8px">Seuls les alumni qui ont choisi d’afficher leur localisation apparaissent. Zoomez pour séparer les groupes.</p>`, { wide: true });
+
+  try { await loadMapLibs(); } catch {
+    if ($('#map')) $('#map').innerHTML = '<div class="empty">La carte n’a pas pu être chargée. Vérifiez votre connexion et réessayez.</div>';
+    return;
+  }
+  const { data, error } = await sb.rpc('directory_list');
+  if (currentView !== 'map' || !$('#map')) return;
+  if (error) { $('#mapCount').textContent = errMsg(error); return; }
+  dirRows = data || [];
+
+  const years = [...new Set(dirRows.map((r) => r.graduation_year).filter(Boolean))].sort((a, b) => b - a);
+  $('#mapYear').insertAdjacentHTML('beforeend', years.map((y) => `<option value="${esc(y)}">Promo ${esc(y)}</option>`).join(''));
+
+  mapObj = window.L.map('map', { worldCopyJump: true, minZoom: 2, zoomSnap: 0.5, zoomAnimation: false, fadeAnimation: false, markerZoomAnimation: false }).setView([28, 10], 2);
+  window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18,
+    attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>',
+  }).addTo(mapObj);
+  cluster = window.L.markerClusterGroup({ showCoverageOnHover: false, maxClusterRadius: 45, animate: false, animateAddingMarkers: false });
+  mapObj.addLayer(cluster);
+
+  $('#mapYear').addEventListener('change', () => renderMap(true));
+  $('#mapQ').addEventListener('input', () => renderMap(true));
+  renderMap(true);
+}
+
+function popupHtml(r) {
+  const name = `${r.first_name || ''} ${r.last_name || ''}`.trim();
+  const study = [r.program, r.school].filter(Boolean).map(esc).join(' · ');
+  return `<div class="pp">
+    <div class="pp-head"><div class="avatar pp-av" data-p="${esc(r.id)}" aria-hidden="true">${esc(initials(r))}</div>
+      <div><b>${esc(name)}</b><div class="small muted">${r.graduation_year ? 'Promo ' + esc(r.graduation_year) : 'Ancien élève'}</div></div></div>
+    ${study ? `<p class="small">${study}</p>` : ''}
+    <p class="small muted">📍 ${[r.city, r.country].filter(Boolean).map(esc).join(', ')}</p>
+    <button class="btn sm" data-action="viewMember" data-id="${esc(r.id)}">Voir le profil</button></div>`;
+}
+
+async function hydratePopupPhoto(r) {
+  const url = await photoUrl(r.photo_path);
+  const el = [...document.querySelectorAll('.pp-av')].find((n) => n.dataset.p === r.id);
+  if (url && el) el.outerHTML = avatarHtml(r, url, '');
+}
+
+function renderMap(fit) {
+  if (!mapObj || !cluster) return;
+  const q = fold($('#mapQ').value.trim());
+  const year = $('#mapYear').value;
+  const located = dirRows.filter((r) => r.lat != null && r.lng != null);
+  mapRows = located.filter((r) =>
+    (!year || String(r.graduation_year) === year) &&
+    (!q || fold([r.first_name, r.last_name, r.school, r.program, r.city, r.country].join(' ')).includes(q)));
+
+  cluster.clearLayers();
+  mapPts = [];
+  const pin = window.L.divIcon({ className: 'pin', html: '<span></span>', iconSize: [24, 24] });
+  mapRows.forEach((r) => {
+    const m = window.L.marker([r.lat, r.lng], { icon: pin, title: `${r.first_name || ''} ${r.last_name || ''}`.trim() });
+    m.bindPopup(() => popupHtml(r), { maxWidth: 260 });
+    m.on('popupopen', () => hydratePopupPhoto(r));
+    cluster.addLayer(m);
+    mapPts.push([r.lat, r.lng]);
+  });
+
+  const hidden = dirRows.length - located.length;
+  $('#mapCount').textContent = `${mapRows.length} alumni sur la carte` +
+    (hidden > 0 ? ` · ${hidden} sans position (localisation masquée ou ville non reconnue)` : '');
+
+  const byCountry = new Map();
+  mapRows.forEach((r) => {
+    const key = r.country_code || r.country || '?';
+    const cur = byCountry.get(key) || { name: r.country || '?', n: 0 };
+    cur.n++; byCountry.set(key, cur);
+  });
+  const chips = [...byCountry.entries()].sort((a, b) => b[1].n - a[1].n);
+  $('#mapChips').innerHTML = chips.length
+    ? `<button class="chip" data-action="mapAll">🌍 Tout le monde</button>` +
+      chips.map(([k, v]) => `<button class="chip" data-action="mapCountry" data-c="${esc(k)}">${esc(v.name)} · ${v.n}</button>`).join('')
+    : '';
+  if (fit && mapPts.length) mapObj.fitBounds(mapPts, { padding: [40, 40], maxZoom: 5 });
+}
+
+function focusCountry(key) {
+  const pts = mapRows.filter((r) => (r.country_code || r.country || '?') === key).map((r) => [r.lat, r.lng]);
+  if (mapObj && pts.length) mapObj.fitBounds(pts, { padding: [40, 40], maxZoom: 6 });
+}
+
+async function checkPositions() {
+  const box = $('#geoFix');
+  if (!box) return;
+  const { data } = await sb.from('profiles').select('id, country, city, country_code')
+    .eq('status', 'approved').eq('member_type', 'alumni').is('lat', null);
+  geoTodo = (data || []).filter((r) => r.country && r.city);
+  const n = geoTodo.length;
+  box.innerHTML = n
+    ? `<div class="info-banner small">📍 <b>${n}</b> alumni validé${n > 1 ? 's' : ''} ${n > 1 ? 'n’ont' : 'n’a'} pas de position sur la carte.
+        <button class="btn sm" style="margin-left:6px" data-action="geoBackfill">Calculer les positions</button></div>` : '';
+}
+
+/* ------------------------------------------------------------------ */
 /* Administration : validation des inscriptions                        */
 /* ------------------------------------------------------------------ */
 const TABS = [['pending', 'En attente'], ['approved', 'Validés'], ['rejected', 'Refusés'], ['reports', 'Signalements']];
@@ -1221,8 +1455,7 @@ async function countOf(filters, table = 'profiles') {
 let adminBadgeN = 0;
 function setAdminBadge(n) {
   adminBadgeN = Number(n) || 0;
-  const b = $('#navBadge');
-  if (b) { b.textContent = adminBadgeN; b.hidden = adminBadgeN === 0; }
+  $$('.js-admin-badge').forEach((b) => { b.textContent = adminBadgeN; b.hidden = adminBadgeN === 0; });
 }
 // Pastille « à traiter » : demandes en attente + signalements ouverts.
 async function refreshBadge() {
@@ -1240,6 +1473,7 @@ async function viewAdmin() {
     <div class="page-head"><h1>Validation des inscriptions</h1>
       <button class="btn ghost sm" data-action="refreshAdmin">Actualiser</button></div>
     <div class="stats" id="stats"></div>
+    <div id="geoFix"></div>
     <div class="tabs" role="tablist">
       ${TABS.map(([k, l]) => `<button role="tab" data-action="adminTab" data-tab="${k}" aria-selected="${k === adminTab}">${l}</button>`).join('')}
     </div>
@@ -1263,6 +1497,7 @@ async function loadStats() {
   box.innerHTML = [['En attente', pending], ['Alumni validés', alumni], ['Lycéens validés', students], ['Refusés', rejected], ['Signalements ouverts', reports]]
     .map(([l, n]) => `<div class="stat"><b>${n}</b><span>${l}</span></div>`).join('');
   setAdminBadge(pending + reports);
+  checkPositions();
 }
 
 async function loadAdminList() {
@@ -1346,6 +1581,22 @@ const actions = {
   refreshAdmin: () => { loadStats(); loadAdminList(); },
   adminTab: (el) => { adminTab = el.dataset.tab; $$('.tabs button').forEach((b) => b.setAttribute('aria-selected', b === el)); loadAdminList(); },
   closeModal: () => closeModal(),
+  mapCountry: (el) => focusCountry(el.dataset.c),
+  mapAll: () => { if (mapObj && mapPts.length) mapObj.fitBounds(mapPts, { padding: [40, 40], maxZoom: 5 }); },
+  geoBackfill: async (el) => {
+    el.disabled = true; el.textContent = 'Calcul en cours…';
+    const countries = await loadCountries();
+    let done = 0, missed = 0;
+    for (const r of geoTodo) {
+      const code = r.country_code || countries.find(([, n]) => geoKey(n) === geoKey(r.country))?.[0];
+      const pos = code ? await resolvePosition(code, r.city) : null;
+      if (!pos) { missed++; continue; }
+      const { error } = await sb.from('profiles').update({ country_code: code, lat: pos.la, lng: pos.ln, city: pos.n }).eq('id', r.id);
+      if (error) missed++; else done++;
+    }
+    toast(`${done} position${done > 1 ? 's' : ''} calculée${done > 1 ? 's' : ''}` + (missed ? ` · ${missed} ville${missed > 1 ? 's' : ''} non reconnue${missed > 1 ? 's' : ''} (à corriger par la personne)` : '') + '.');
+    checkPositions();
+  },
   enableNotif: () => { Notification.requestPermission().then(renderNotifBox); },
   startConv: async (el) => {
     el.disabled = true;
@@ -1476,6 +1727,7 @@ function openPrivacy() {
       <h3>Qui peut les voir ?</h3>
       <p><b>Uniquement</b> les membres de la communauté validés par l’établissement (anciens élèves, lycéens, personnels) et l’administration du GSJC (CPE, chargée d’orientation, direction). Vos données ne sont ni publiques, ni référencées sur internet, ni vendues, ni utilisées à des fins publicitaires.</p>
       <p>Vous décidez de ce qui est visible : photo, pays et ville, établissement et formation, réseaux sociaux, adresse e-mail. Vous choisissez aussi les moyens par lesquels on peut vous contacter. L’administration peut vérifier ces informations.</p>
+      <p>La carte n’affiche que la <b>ville</b> (jamais une adresse) des alumni qui ont choisi d’afficher leur localisation. Les images du fond de carte sont fournies par OpenStreetMap : votre navigateur contacte leurs serveurs pour les télécharger, sans leur transmettre vos informations de profil.</p>
       <p><b>Vos messages entre membres sont privés</b> : seuls les deux participants peuvent les lire. L’administration ne peut consulter une conversation que si l’un des participants la signale, et uniquement cette conversation, afin de protéger les élèves.</p>
       <h3>Base légale et durée</h3>
       <p>Vos données sont traitées avec votre consentement, que vous pouvez retirer à tout moment. Elles sont conservées tant que votre compte est actif. Pour les élèves mineurs, l’inscription suppose l’accord de leurs représentants légaux.</p>

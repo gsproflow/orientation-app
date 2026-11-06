@@ -286,3 +286,52 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
 .quote { background: var(--bg); border-radius: 10px; padding: .6rem .8rem; font-size: .93rem; overflow-wrap: anywhere; }
 details summary { cursor: pointer; font-weight: 600; color: var(--blue); min-height: 40px; display: flex; align-items: center; }
 @media (min-width: 900px) { .stats { grid-template-columns: repeat(5, 1fr); } }
+
+/* ---------- Carte ---------- */
+.map { height: 62vh; min-height: 380px; border-radius: var(--radius); box-shadow: var(--shadow); isolation: isolate; background: #dfe7f1; }
+@supports (height: 100dvh) { .map { height: calc(100dvh - 330px); min-height: 380px; } }
+.pin span { display: block; width: 18px; height: 18px; border-radius: 50%; background: var(--blue); border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.45); }
+.marker-cluster-small, .marker-cluster-medium, .marker-cluster-large { background-color: rgba(248, 168, 56, .45); }
+.marker-cluster-small div, .marker-cluster-medium div, .marker-cluster-large div { background-color: var(--gold); color: #1c2430; font-weight: 800; font-family: inherit; }
+.leaflet-container { font-family: inherit; }
+.leaflet-popup-content { margin: 12px 14px; min-width: 190px; }
+.pp-head { display: flex; gap: .6rem; align-items: center; margin-bottom: 6px; }
+.pp p { margin: 2px 0 8px; }
+.pp .btn { width: 100%; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 6px; max-height: 96px; overflow: auto; }
+.chip { border: 1.5px solid var(--line); background: #fff; border-radius: 99px; padding: .3rem .8rem; font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer; min-height: 36px; color: var(--blue); }
+.chip:hover { background: var(--blue-soft); }
+
+/* ---------- Barre d'onglets (téléphone) ---------- */
+.tabbar { display: none; }
+@media (max-width: 719px) {
+  .nav .dlink { display: none; }
+  .tabbar { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; background: #fff; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -2px 12px rgba(16,32,64,.08); }
+  .tabbar .tab { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; min-height: 58px; text-decoration: none; color: var(--muted); font-size: .72rem; position: relative; }
+  .tabbar .tab.active { color: var(--blue); font-weight: 700; }
+  .tabbar .tab.active::before { content: ""; position: absolute; top: 0; left: 25%; right: 25%; height: 3px; border-radius: 0 0 3px 3px; background: var(--gold); }
+  .tabbar .ti { font-size: 1.35rem; line-height: 1.1; }
+  .tabbar .badge { position: absolute; top: 4px; left: calc(50% + 6px); font-size: .68rem; }
+  body.has-tabbar .foot { padding-bottom: 5.5rem; }
+  body.has-tabbar .toast { bottom: 76px; }
+}
+
+/* La bulle de notification ne gêne jamais les appuis (barre d'onglets comprise) */
+.toast { pointer-events: none; opacity: 0; visibility: hidden; transition: transform .25s, opacity .25s, visibility .25s; }
+.toast.show { opacity: 1; visibility: visible; }
+
+/* ---------- Carte : mise en page mobile (la carte passe en premier) ---------- */
+.page-head.tight { margin-bottom: .2rem; }
+.page-head.tight h1 { font-size: 1.35rem; }
+.chips.scroll { flex-wrap: nowrap; overflow-x: auto; max-height: none; padding-bottom: 6px; margin: 2px 0 8px; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+.chips.scroll .chip { flex: none; }
+.filters-d { padding: 6px 14px; margin-bottom: 10px; }
+.filters-d summary { cursor: pointer; font-weight: 600; color: var(--blue); min-height: 44px; display: flex; align-items: center; list-style: none; }
+.filters-d summary::-webkit-details-marker { display: none; }
+.filters-d[open] { padding-bottom: 2px; }
+.map { height: 56vh; min-height: 340px; }
+@supports (height: 100dvh) { .map { height: calc(100dvh - 330px); min-height: 340px; } }
+@media (min-width: 720px) { .map { height: calc(100dvh - 300px); min-height: 460px; } }
+/* nos couleurs priment sur celles de la bibliothèque, chargée après */
+.leaflet-container .marker-cluster-small, .leaflet-container .marker-cluster-medium, .leaflet-container .marker-cluster-large { background-color: rgba(248, 168, 56, .45); }
+.leaflet-container .marker-cluster-small div, .leaflet-container .marker-cluster-medium div, .leaflet-container .marker-cluster-large div { background-color: #f8a838; color: #1c2430; font-weight: 800; font-family: inherit; }

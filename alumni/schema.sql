@@ -62,6 +62,15 @@ create table if not exists public.profiles (
 
 create index if not exists profiles_status_idx on public.profiles (status, updated_at desc);
 
+-- Position sur la carte (ville d'études) : calculée par l'application à partir
+-- d'une liste de villes, jamais envoyée à un service extérieur.
+alter table public.profiles add column if not exists country_code text
+  check (country_code ~ '^[A-Z]{2}$');
+alter table public.profiles add column if not exists lat double precision
+  check (lat between -90 and 90);
+alter table public.profiles add column if not exists lng double precision
+  check (lng between -180 and 180);
+
 -- Une photo doit toujours se trouver dans le dossier de son propriétaire.
 do $$
 begin
@@ -310,13 +319,16 @@ as $$
   );
 $$;
 
+-- (le format de réponse change : on supprime l'ancienne version avant de recréer)
+drop function if exists public.directory_list();
+
 create or replace function public.directory_list()
 returns table (
   id uuid, first_name text, last_name text, graduation_year int,
   country text, city text, school text, program text,
   linkedin text, instagram text, photo_path text,
   contact_email boolean, contact_message boolean, contact_chat boolean,
-  email text
+  email text, country_code text, lat double precision, lng double precision
 )
 language sql stable security definer
 set search_path = public
@@ -331,7 +343,10 @@ as $$
     case when p.show_social   then p.instagram end,
     case when p.show_photo    then p.photo_path end,
     p.contact_email, p.contact_message, p.contact_chat,
-    case when p.contact_email then p.email end   -- e-mail partagé seulement si la personne accepte ce contact
+    case when p.contact_email then p.email end,  -- e-mail partagé seulement si la personne accepte ce contact
+    case when p.show_location then p.country_code end,
+    case when p.show_location then p.lat end,
+    case when p.show_location then p.lng end
   from public.profiles p
   where public.is_member()
     and p.status = 'approved'
