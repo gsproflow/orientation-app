@@ -77,7 +77,7 @@ function errMsg(err) {
   ];
   for (const [re, fr] of map) if (re.test(m)) return fr;
   // Messages métier déjà en français renvoyés par la base (schema.sql).
-  if (/^(Profil incomplet|Modification non autorisée|Changement de statut|Le type de compte|Trop de messages|Cette personne|Limite atteinte|Destinataire|Vous ne pouvez pas|Accès réservé|Conversation introuvable|Ce type de compte)/.test(m)) return m;
+  if (/^(Profil incomplet|Modification non autorisée|Changement de statut|Le type de compte|Trop de messages|Cette personne|Limite atteinte|Destinataire|Vous ne pouvez pas|Accès réservé|Conversation introuvable|Ce type de compte|Ce message ne peut plus|Message introuvable)/.test(m)) return m;
   return 'Une erreur est survenue. Réessayez, ou contactez l’administration si cela continue. (' + m + ')';
 }
 
@@ -1026,6 +1026,7 @@ function startLive() {
   try {
     live = sb.channel('live-' + profile.id)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, onChatMessage)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, onChatMessageUpdate)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'admin_messages' }, onAdminMessage)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'news' }, (p) => onContent('news', p.new))
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'events' }, (p) => onContent('events', p.new))
@@ -1058,6 +1059,12 @@ async function pollLive() {
   if (currentView === 'feed' && !$('.modal')) loadFeed();
   if (currentView === 'messages') loadConversationList();
   if (currentView === 'conversation' && convOpen) fetchNewMessages();
+}
+
+function onChatMessageUpdate({ new: row }) {
+  if (!row || !row.retracted_at) return;
+  if (currentView === 'conversation' && convOpen === row.conversation_id) markRetracted(row.id);
+  else { refreshUnread(); if (currentView === 'messages') loadConversationList(); }
 }
 
 async function onChatMessage({ new: row }) {
@@ -1135,7 +1142,7 @@ async function loadConversationList() {
   const box = $('#convList');
   if (!box || currentView !== 'messages') return;
   if (conv.error) { box.innerHTML = `<p class="err">${esc(errMsg(conv.error))}</p>`; return; }
-  const rows = conv.data || [];
+  const rows = (conv.data || []).filter((c) => !c.hidden);
   await photoUrls(rows.map((c) => c.other_photo));
   if (!$('#convList') || currentView !== 'messages') return;
 
@@ -1154,8 +1161,8 @@ async function loadConversationList() {
     const url = urlCache.get(c.other_photo)?.url || null;
     items.push(`<a class="conv ${c.unread > 0 ? 'new' : ''}" href="#/messages/${esc(c.id)}">
       ${avatarHtml({ first_name: c.other_first, last_name: c.other_last }, url)}
-      <div class="conv-body"><div class="conv-top"><b>${esc(name)}</b><span class="small muted">${c.last_body ? fmtDateTime(c.last_at) : ''}</span></div>
-      <div class="conv-prev">${c.last_body ? (c.last_sender === profile.id ? 'Vous : ' : '') + esc(preview(c.last_body)) : '<i>Nouvelle conversation</i>'}</div></div>
+      <div class="conv-body"><div class="conv-top"><b>${esc(name)}</b><span class="small muted">${c.last_body || c.last_retracted ? fmtDateTime(c.last_at) : ''}</span></div>
+      <div class="conv-prev">${c.last_retracted ? '<i>Message retiré</i>' : c.last_body ? (c.last_sender === profile.id ? 'Vous : ' : '') + esc(preview(c.last_body)) : '<i>Nouvelle conversation</i>'}</div></div>
       ${c.unread > 0 ? `<span class="badge">${c.unread}</span>` : ''}</a>`);
   }
   box.innerHTML = items.length ? items.join('')
@@ -1171,7 +1178,10 @@ async function viewConversation(id) {
     <div class="conv-head">
       <a class="btn ghost sm" href="#/messages">← Messages</a>
       <div id="convWho" class="conv-who"></div>
-      <button class="btn danger-ghost sm" data-action="report" data-id="${esc(id)}">Signaler</button>
+      <div class="conv-actions">
+        <button class="btn danger-ghost sm" data-action="report" data-id="${esc(id)}">Signaler</button>
+        <button class="btn ghost sm" data-action="clearConv" data-id="${esc(id)}" aria-label="Supprimer la conversation">🗑 Supprimer</button>
+      </div>
     </div>
     <section class="card chat">
       <div id="chatThread" class="thread chat-thread" aria-live="polite"><p class="muted small">Chargement…</p></div>
@@ -1219,15 +1229,70 @@ async function viewConversation(id) {
   });
 }
 
+const RETRACT_MS = 5 * 60 * 1000; // un message peut être retiré pendant 5 minutes
+
+function bubbleHtml(m) {
+  const mine = m.sender_id === profile.id;
+  const gone = !!m.retracted_at;
+  const canRetract = mine && !gone && Date.now() - new Date(m.created_at).getTime() < RETRACT_MS;
+  return `<div class="bubble ${mine ? 'user' : 'admin'} ${gone ? 'gone' : ''}" data-mid="${esc(m.id)}"><span class="who">${fmtDateTime(m.created_at)}</span>${
+    gone ? '<i>Message retiré</i>' : esc(m.body)}${
+    canRetract ? `<button class="retract" data-action="retractMsg" data-id="${esc(m.id)}">Retirer</button>` : ''}</div>`;
+}
+
 function appendMessage(m) {
   const box = $('#chatThread');
   if (!box || !m || convSeen.has(m.id)) return;
   convSeen.add(m.id);
   $('#chatEmpty')?.remove();
-  const mine = m.sender_id === profile.id;
-  box.insertAdjacentHTML('beforeend',
-    `<div class="bubble ${mine ? 'user' : 'admin'}"><span class="who">${fmtDateTime(m.created_at)}</span>${esc(m.body)}</div>`);
+  box.insertAdjacentHTML('beforeend', bubbleHtml(m));
+  const el = box.lastElementChild;
+  if (m.sender_id === profile.id && !m.retracted_at) {
+    const left = RETRACT_MS - (Date.now() - new Date(m.created_at).getTime());
+    if (left > 0) setTimeout(() => el.querySelector('.retract')?.remove(), left); // le délai est écoulé : le lien disparaît
+  }
   box.scrollTop = box.scrollHeight;
+}
+
+function markRetracted(id) {
+  const el = $(`.bubble[data-mid="${CSS.escape(String(id))}"]`);
+  if (!el || el.classList.contains('gone')) return;
+  el.classList.add('gone');
+  el.innerHTML = `${el.querySelector('.who')?.outerHTML || ''}<i>Message retiré</i>`;
+}
+
+function confirmRetract(id) {
+  const box = openModal(`
+    <h2>Retirer ce message ?</h2>
+    <p>Il disparaîtra aussi chez l’autre personne, qui verra « Message retiré ». Ce n’est possible que pendant 5 minutes.</p>
+    <div class="row end" style="margin-top:14px"><button class="btn ghost" data-action="closeModal">Annuler</button>
+      <button class="btn danger" id="retractOk">Retirer le message</button></div>`);
+  $('#retractOk', box).addEventListener('click', async (e) => {
+    busy(e.target, true, 'Retrait…');
+    const { error } = await sb.rpc('retract_message', { mid: Number(id) });
+    closeModal();
+    if (error) { document.querySelector(`.bubble[data-mid="${CSS.escape(String(id))}"] .retract`)?.remove(); return toast(errMsg(error), 'err'); }
+    markRetracted(id);
+    toast('Message retiré.');
+  });
+}
+
+function confirmClear(id) {
+  const box = openModal(`
+    <h2>Supprimer cette conversation ?</h2>
+    <p>Elle disparaît de votre messagerie. <b>L’autre personne conserve ses messages.</b></p>
+    <p class="muted small">Une conversation qui a été signalée est conservée par l’administration le temps de l’examen. La conversation n’est effacée définitivement que lorsque les deux personnes l’ont supprimée.</p>
+    <div class="row end" style="margin-top:14px"><button class="btn ghost" data-action="closeModal">Annuler</button>
+      <button class="btn danger" id="clearOk">Supprimer la conversation</button></div>`);
+  $('#clearOk', box).addEventListener('click', async (e) => {
+    busy(e.target, true, 'Suppression…');
+    const { error } = await sb.rpc('clear_conversation', { cid: id });
+    closeModal();
+    if (error) return toast(errMsg(error), 'err');
+    toast('Conversation supprimée.');
+    refreshUnread();
+    location.hash = '#/messages';
+  });
 }
 
 async function fetchNewMessages() {
@@ -1236,6 +1301,7 @@ async function fetchNewMessages() {
   if (convOpen !== id) return;
   const fresh = (data || []).filter((m) => !convSeen.has(m.id));
   fresh.forEach(appendMessage);
+  (data || []).filter((m) => m.retracted_at).forEach((m) => markRetracted(m.id));
   if (fresh.some((m) => m.sender_id !== profile.id)) sb.rpc('mark_conversation_read', { cid: id }).then(refreshUnread);
 }
 
@@ -2438,6 +2504,8 @@ const actions = {
   refreshAdmin: () => { loadStats(); loadAdminList(); },
   adminTab: (el) => { adminTab = el.dataset.tab; $$('.tabs button').forEach((b) => b.setAttribute('aria-selected', b === el)); loadAdminList(); },
   closeModal: () => closeModal(),
+  retractMsg: (el) => confirmRetract(el.dataset.id),
+  clearConv: (el) => confirmClear(el.dataset.id),
   newOffer: () => openOfferForm(),
   openOffer: (el) => openOffer(el.dataset.id),
   editOffer: (el) => { const o = offerRows.find((x) => String(x.id) === el.dataset.id); if (o) { closeModal(); openOfferForm(o); } },
@@ -2621,7 +2689,7 @@ function openPrivacy() {
       <p><b>Uniquement</b> les membres de la communauté validés par l’établissement (anciens élèves, lycéens, personnels) et l’administration du GSJC (CPE, chargée d’orientation, direction). Vos données ne sont ni publiques, ni référencées sur internet, ni vendues, ni utilisées à des fins publicitaires.</p>
       <p>Vous décidez de ce qui est visible : photo, pays et ville, établissement et formation, réseaux sociaux, adresse e-mail. Vous choisissez aussi les moyens par lesquels on peut vous contacter. L’administration peut vérifier ces informations.</p>
       <p>La carte n’affiche que la <b>ville</b> (jamais une adresse) des alumni qui ont choisi d’afficher leur localisation. Le fond de carte est intégré à l’application : aucun serveur de cartes extérieur n’est contacté.</p>
-      <p><b>Vos messages entre membres sont privés</b> : seuls les deux participants peuvent les lire. L’administration ne peut consulter une conversation que si l’un des participants la signale, et uniquement cette conversation, afin de protéger les élèves.</p>
+      <p><b>Vos messages entre membres sont privés</b> : seuls les deux participants peuvent les lire. L’administration ne peut consulter une conversation que si l’un des participants la signale, et uniquement cette conversation, afin de protéger les élèves. Vous pouvez supprimer une conversation de votre côté (l’autre personne garde la sienne) et retirer un message dans les 5 minutes qui suivent son envoi ; une conversation signalée est conservée le temps de l’examen.</p>
       <h3>Base légale et durée</h3>
       <p>Vos données sont traitées avec votre consentement, que vous pouvez retirer à tout moment. Elles sont conservées tant que votre compte est actif. Pour les élèves mineurs, l’inscription suppose l’accord de leurs représentants légaux.</p>
       <h3>Hébergement et sécurité</h3>

@@ -479,12 +479,25 @@ create table if not exists public.messages (
 );
 create index if not exists messages_conv_idx on public.messages (conversation_id, created_at);
 
+-- Message retiré par son auteur (son contenu est alors effacé).
+alter table public.messages add column if not exists retracted_at timestamptz;
+do $$
+begin
+  alter table public.messages drop constraint if exists messages_body_check;
+  alter table public.messages add constraint messages_body_check
+    check (char_length(body) <= 2000 and (retracted_at is not null or char_length(body) >= 1));
+end $$;
+
 create table if not exists public.conversation_reads (
   conversation_id  uuid not null references public.conversations(id) on delete cascade,
   user_id          uuid not null references public.profiles(id) on delete cascade,
   last_read_at     timestamptz not null default now(),
   primary key (conversation_id, user_id)
 );
+
+-- Date à laquelle chaque participant a supprimé la conversation « pour lui » : les messages
+-- antérieurs ne lui sont plus montrés ; l'autre participant garde les siens.
+alter table public.conversation_reads add column if not exists cleared_at timestamptz;
 
 create table if not exists public.reports (
   id               bigint generated always as identity primary key,
@@ -569,10 +582,14 @@ end;
 $$;
 
 -- Liste de mes conversations avec le dernier message et le nombre de non lus.
+-- (le format de réponse change : on supprime l'ancienne version avant de recréer)
+drop function if exists public.my_conversations();
+
 create or replace function public.my_conversations()
 returns table (
   id uuid, other_id uuid, other_first text, other_last text, other_type text,
-  other_photo text, last_body text, last_at timestamptz, last_sender uuid, unread bigint
+  other_photo text, last_body text, last_at timestamptz, last_sender uuid, unread bigint,
+  last_retracted boolean, hidden boolean
 )
 language sql stable security definer
 set search_path = public
@@ -580,19 +597,26 @@ as $$
   select
     c.id, o.id, o.first_name, o.last_name, o.member_type,
     case when o.show_photo then o.photo_path end,
-    lm.body, coalesce(lm.created_at, c.created_at), lm.sender_id,
+    case when lm.retracted_at is null then lm.body end,
+    coalesce(lm.created_at, c.created_at), lm.sender_id,
     (select count(*) from public.messages m
       where m.conversation_id = c.id
         and m.sender_id <> auth.uid()
-        and m.created_at > coalesce(r.last_read_at, '-infinity'::timestamptz))
+        and m.retracted_at is null
+        and m.created_at > coalesce(r.last_read_at, '-infinity'::timestamptz)
+        and m.created_at > coalesce(r.cleared_at, '-infinity'::timestamptz)),
+    (lm.retracted_at is not null),
+    (r.cleared_at is not null and lm.id is null)
   from public.conversations c
   join public.profiles o
     on o.id = case when c.user_a = auth.uid() then c.user_b else c.user_a end
   left join public.conversation_reads r
     on r.conversation_id = c.id and r.user_id = auth.uid()
   left join lateral (
-    select m.body, m.created_at, m.sender_id from public.messages m
-    where m.conversation_id = c.id order by m.created_at desc limit 1
+    select m.id, m.body, m.created_at, m.sender_id, m.retracted_at from public.messages m
+    where m.conversation_id = c.id
+      and m.created_at > coalesce(r.cleared_at, '-infinity'::timestamptz)
+    order by m.created_at desc limit 1
   ) lm on true
   where public.is_member() and auth.uid() in (c.user_a, c.user_b)
   order by coalesce(lm.created_at, c.created_at) desc;
@@ -628,6 +652,75 @@ begin
   on conflict (conversation_id, user_id) do update set last_read_at = excluded.last_read_at;
 end;
 $$;
+
+-- Supprimer une conversation « pour moi ». L'autre personne garde la sienne ; une conversation
+-- signalée n'est jamais effacée ; elle l'est définitivement quand les deux l'ont supprimée.
+create or replace function public.clear_conversation(cid uuid)
+returns text
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  c     public.conversations;
+  other uuid;
+  other_cleared timestamptz;
+begin
+  if not public.is_participant(cid) then
+    raise exception 'Conversation introuvable';
+  end if;
+
+  insert into public.conversation_reads (conversation_id, user_id, last_read_at, cleared_at)
+  values (cid, auth.uid(), now(), now())
+  on conflict (conversation_id, user_id)
+  do update set cleared_at = now(), last_read_at = now();
+
+  select * into c from public.conversations where id = cid;
+  other := case when c.user_a = auth.uid() then c.user_b else c.user_a end;
+  select r.cleared_at into other_cleared from public.conversation_reads r
+   where r.conversation_id = cid and r.user_id = other;
+
+  if other_cleared is not null
+     and not exists (select 1 from public.messages m
+                     where m.conversation_id = cid and m.created_at > other_cleared)
+     and not public.is_reported(cid) then
+    delete from public.conversations where id = cid;
+    return 'purged';
+  end if;
+  return 'cleared';
+end;
+$$;
+
+-- Retirer un de mes messages : possible 5 minutes, jamais dans une conversation signalée.
+-- Le contenu est effacé ; l'autre personne voit « Message retiré ».
+create or replace function public.retract_message(mid bigint)
+returns void
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  m public.messages;
+begin
+  select * into m from public.messages where id = mid;
+  if not found or m.sender_id <> auth.uid() or not public.is_participant(m.conversation_id) then
+    raise exception 'Message introuvable';
+  end if;
+  if m.retracted_at is not null then
+    return;
+  end if;
+  if public.is_reported(m.conversation_id) then
+    raise exception 'Ce message ne peut plus être retiré : la conversation a été signalée';
+  end if;
+  if m.created_at < now() - interval '5 minutes' then
+    raise exception 'Ce message ne peut plus être retiré (délai de 5 minutes dépassé)';
+  end if;
+  update public.messages set body = '', retracted_at = now() where id = mid;
+end;
+$$;
+
+revoke all on function public.clear_conversation(uuid), public.retract_message(bigint)
+  from public, anon;
+grant execute on function public.clear_conversation(uuid), public.retract_message(bigint)
+  to authenticated;
 
 -- Anti-spam : 60 messages par heure et par personne.
 create or replace function public.limit_message_rate()
@@ -665,10 +758,24 @@ create policy conversations_select on public.conversations
   for select to authenticated
   using (auth.uid() in (user_a, user_b) or (public.is_admin() and public.is_reported(id)));
 
+-- Date de ma dernière suppression de cette conversation (null si jamais supprimée).
+create or replace function public.my_cleared_at(cid uuid)
+returns timestamptz
+language sql stable security definer
+set search_path = public
+as $$
+  select r.cleared_at from public.conversation_reads r
+  where r.conversation_id = cid and r.user_id = auth.uid();
+$$;
+
+revoke all on function public.my_cleared_at(uuid) from public, anon;
+grant execute on function public.my_cleared_at(uuid) to authenticated;
+
 drop policy if exists chat_messages_select on public.messages;
 create policy chat_messages_select on public.messages
   for select to authenticated
-  using (public.is_participant(conversation_id)
+  using ((public.is_participant(conversation_id)
+          and created_at > coalesce(public.my_cleared_at(conversation_id), '-infinity'::timestamptz))
          or (public.is_admin() and public.is_reported(conversation_id)));
 
 drop policy if exists chat_messages_insert on public.messages;
