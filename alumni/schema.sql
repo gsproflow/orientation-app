@@ -71,6 +71,10 @@ alter table public.profiles add column if not exists lat double precision
 alter table public.profiles add column if not exists lng double precision
   check (lng between -180 and 180);
 
+-- Propriétaire de l'application (super-administrateur). Ne se change que depuis l'éditeur SQL
+-- de Supabase : aucun compte, pas même le sien, ne peut s'attribuer ou retirer ce statut.
+alter table public.profiles add column if not exists is_owner boolean not null default false;
+
 -- Domaine d'études (liste fixe) : indispensable pour des statistiques par filière fiables.
 alter table public.profiles add column if not exists study_field text
   check (study_field in ('law','health','engineering','it','business','humanities','arts','comms','education','other'));
@@ -110,6 +114,18 @@ as $$
   select exists (
     select 1 from public.profiles
     where id = auth.uid() and role = 'admin' and status = 'approved'
+  );
+$$;
+
+-- Vrai si la personne connectée est le propriétaire de l'application.
+create or replace function public.is_owner()
+returns boolean
+language sql stable security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role = 'admin' and status = 'approved' and is_owner
   );
 $$;
 
@@ -243,8 +259,49 @@ begin
     return new;
   end if;
 
-  -- Administrateur : peut tout modifier ; la décision est horodatée.
+  -- Administrateur : valide et gère les membres ; la décision est horodatée.
+  -- Seul le propriétaire gère les administrateurs (nommer, retirer, supprimer).
   if public.is_admin() then
+    if new.is_owner is distinct from old.is_owner then
+      raise exception 'Le statut de propriétaire ne se modifie que depuis Supabase';
+    end if;
+
+    if new.role = 'admin' and old.role is distinct from 'admin' and new.member_type = 'student' then
+      raise exception 'Un lycéen ne peut pas être administrateur';
+    end if;
+
+    if public.is_owner() then
+      if old.id = auth.uid() and (new.role is distinct from old.role or new.status is distinct from old.status) then
+        raise exception 'Le propriétaire ne peut pas modifier son propre rôle ni son statut';
+      end if;
+      if old.is_owner and old.id <> auth.uid() then
+        raise exception 'Un propriétaire ne peut pas être modifié par un autre compte';
+      end if;
+      -- Trace des décisions du propriétaire concernant les administrateurs.
+      if (old.role = 'admin' or new.role = 'admin')
+         and (new.role is distinct from old.role or new.status is distinct from old.status) then
+        insert into public.admin_log (actor, actor_email, action, target_id, target_email, detail)
+        values (auth.uid(), (select p.email from public.profiles p where p.id = auth.uid()),
+                case when new.role = 'admin' and old.role is distinct from 'admin' then 'promote_admin'
+                     when old.role = 'admin' and new.role is distinct from 'admin' then 'demote_admin'
+                     else 'admin_status_change' end,
+                old.id, old.email,
+                jsonb_build_object('from_role', old.role, 'to_role', new.role,
+                                   'from_status', old.status, 'to_status', new.status));
+      end if;
+    else
+      if old.id = auth.uid() then
+        if new.role is distinct from old.role or new.status is distinct from old.status then
+          raise exception 'Vous ne pouvez pas modifier votre propre rôle ni votre statut';
+        end if;
+      elsif old.role = 'admin' or old.is_owner then
+        raise exception 'Seul le propriétaire peut modifier un administrateur';
+      end if;
+      if new.role is distinct from old.role then
+        raise exception 'Seul le propriétaire peut nommer ou retirer un administrateur';
+      end if;
+    end if;
+
     if new.status is distinct from old.status and new.status in ('approved','rejected') then
       new.reviewed_by := auth.uid();
       new.reviewed_at := now();
@@ -1342,6 +1399,81 @@ $$;
 
 revoke all on function public.admin_stats(int, int) from public, anon;
 grant execute on function public.admin_stats(int, int) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 11. Propriétaire (super-administrateur)
+--     Voir le mode d'emploi en bas de ce fichier pour créer le compte propriétaire.
+-- ---------------------------------------------------------------------
+-- Journal des décisions du propriétaire (visible de lui seul).
+create table if not exists public.admin_log (
+  id            bigint generated always as identity primary key,
+  at            timestamptz not null default now(),
+  actor         uuid references public.profiles(id) on delete set null,
+  actor_email   text,
+  action        text not null,
+  target_id     uuid,
+  target_email  text,
+  detail        jsonb
+);
+create index if not exists admin_log_at_idx on public.admin_log (at desc);
+
+alter table public.admin_log enable row level security;
+
+drop policy if exists admin_log_select on public.admin_log;
+create policy admin_log_select on public.admin_log
+  for select to authenticated using (public.is_owner());
+
+-- Supprimer définitivement un compte (profil, messages, inscriptions). Réservé au propriétaire.
+-- Les photos sont supprimées par l'application juste avant cet appel.
+create or replace function public.delete_member(target uuid)
+returns void
+language plpgsql security definer
+set search_path = public, auth
+as $$
+declare
+  t public.profiles;
+begin
+  if not public.is_owner() then
+    raise exception 'Réservé au propriétaire de l''application';
+  end if;
+  select * into t from public.profiles where id = target;
+  if not found then
+    raise exception 'Compte introuvable';
+  end if;
+  if t.id = auth.uid() or t.is_owner then
+    raise exception 'Ce compte ne peut pas être supprimé ici';
+  end if;
+
+  insert into public.admin_log (actor, actor_email, action, target_id, target_email, detail)
+  values (auth.uid(), (select p.email from public.profiles p where p.id = auth.uid()),
+          'delete_member', t.id, t.email,
+          jsonb_build_object('role', t.role, 'type', t.member_type, 'status', t.status));
+
+  delete from auth.users where id = target;
+end;
+$$;
+
+revoke all on function public.delete_member(uuid) from public, anon;
+grant execute on function public.delete_member(uuid) to authenticated;
+
+-- Le propriétaire peut supprimer les photos d'un compte qu'il supprime.
+drop policy if exists avatars_owner_delete on storage.objects;
+create policy avatars_owner_delete on storage.objects
+  for delete to authenticated
+  using (bucket_id = 'avatars' and public.is_owner());
+
+-- ---------------------------------------------------------------------
+--  CRÉER LE COMPTE PROPRIÉTAIRE (une seule fois)
+--   1. Créez un compte dans l'application avec VOTRE adresse personnelle (type « Ancien élève »).
+--   2. Exécutez la requête ci-dessous dans l'éditeur SQL, en remplaçant l'adresse et vos noms :
+--
+--    update public.profiles
+--    set member_type = 'staff', role = 'admin', status = 'approved', is_owner = true,
+--        first_name = 'Votre prénom', last_name = 'Votre nom',
+--        job_title = 'Propriétaire de l''application', consent_at = now()
+--    where email = 'votre.adresse.perso@gmail.com'
+--    returning email, role, status, is_owner;
+-- ---------------------------------------------------------------------
 
 -- =====================================================================
 --  FIN. Pour vous nommer administrateur (APRÈS vous être inscrit sur

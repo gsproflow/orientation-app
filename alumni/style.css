@@ -432,3 +432,10 @@ details.past[open] { display: grid; gap: 12px; }
 .bubble.gone { opacity: .75; }
 .bubble.gone i { color: var(--muted); }
 .bubble .retract { display: block; margin-top: 4px; background: none; border: 0; padding: .25rem 0; font: inherit; font-size: .78rem; color: var(--muted); text-decoration: underline; cursor: pointer; min-height: 32px; }
+
+/* Équipe (propriétaire) */
+.team-box { background: #fff; border: 1px solid var(--line, #e2e6ee); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+.team-box h3 { margin: 0 0 6px; }
+.team-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--line, #e2e6ee); }
+.team-row .row { gap: 6px; flex-wrap: wrap; }
+.log-row { padding: 6px 0; border-top: 1px solid var(--line, #e2e6ee); }

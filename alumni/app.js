@@ -77,7 +77,7 @@ function errMsg(err) {
   ];
   for (const [re, fr] of map) if (re.test(m)) return fr;
   // Messages métier déjà en français renvoyés par la base (schema.sql).
-  if (/^(Profil incomplet|Modification non autorisée|Changement de statut|Le type de compte|Trop de messages|Cette personne|Limite atteinte|Destinataire|Vous ne pouvez pas|Accès réservé|Conversation introuvable|Ce type de compte|Ce message ne peut plus|Message introuvable)/.test(m)) return m;
+  if (/^(Profil incomplet|Modification non autorisée|Changement de statut|Le type de compte|Trop de messages|Cette personne|Limite atteinte|Destinataire|Vous ne pouvez pas|Accès réservé|Conversation introuvable|Ce type de compte|Ce message ne peut plus|Message introuvable|Le statut de propriétaire|Un lycéen ne peut pas|Seul le propriétaire|Le propriétaire ne peut|Un propriétaire ne|Réservé au propriétaire|Compte introuvable|Ce compte ne peut)/.test(m)) return m;
   return 'Une erreur est survenue. Réessayez, ou contactez l’administration si cela continue. (' + m + ')';
 }
 
@@ -2349,7 +2349,8 @@ async function exportAlumni() {
 /* ------------------------------------------------------------------ */
 /* Administration : validation des inscriptions                        */
 /* ------------------------------------------------------------------ */
-const TABS = [['pending', 'En attente'], ['approved', 'Validés'], ['rejected', 'Refusés'], ['offers', 'Offres'], ['reports', 'Signalements']];
+const TABS_BASE = [['pending', 'En attente'], ['approved', 'Validés'], ['rejected', 'Refusés'], ['offers', 'Offres'], ['reports', 'Signalements']];
+const tabsFor = () => (profile?.is_owner ? [...TABS_BASE, ['team', 'Équipe']] : TABS_BASE);
 
 async function countOf(filters, table = 'profiles') {
   let q = sb.from(table).select('id', { count: 'exact', head: true });
@@ -2383,7 +2384,7 @@ async function viewAdmin() {
     <div class="stats" id="stats"></div>
     <div id="geoFix"></div>
     <div class="tabs" role="tablist">
-      ${TABS.map(([k, l]) => `<button role="tab" data-action="adminTab" data-tab="${k}" aria-selected="${k === adminTab}">${l}</button>`).join('')}
+      ${tabsFor().map(([k, l]) => `<button role="tab" data-action="adminTab" data-tab="${k}" aria-selected="${k === adminTab}">${l}</button>`).join('')}
     </div>
     <div class="field"><input type="search" id="adminSearch" placeholder="Rechercher un nom, une école, un e-mail…" aria-label="Rechercher"></div>
     <div id="adminList" class="cards"><p class="muted">Chargement…</p></div>`, { wide: true });
@@ -2415,6 +2416,7 @@ async function loadAdminList() {
   list.innerHTML = '<p class="muted">Chargement…</p>';
   if (adminTab === 'reports') return loadReports();
   if (adminTab === 'offers') return loadOffersAdmin();
+  if (adminTab === 'team') return loadTeam();
   const { data, error } = await sb.from('profiles').select('*').eq('status', adminTab)
     .order('updated_at', { ascending: adminTab !== 'pending' }).limit(300);
   if (error) { list.innerHTML = `<p class="err">${esc(errMsg(error))}</p>`; return; }
@@ -2425,7 +2427,7 @@ async function loadAdminList() {
 
 function renderAdminList() {
   const list = $('#adminList');
-  if (!list || adminTab === 'reports' || adminTab === 'offers') return;
+  if (!list || adminTab === 'reports' || adminTab === 'offers' || adminTab === 'team') return;
   const q = ($('#adminSearch')?.value || '').trim().toLowerCase();
   const rows = [...adminRows.values()].filter((r) =>
     !q || [r.first_name, r.last_name, r.email, r.school, r.program, r.city, r.country].some((x) => (x || '').toLowerCase().includes(q)));
@@ -2475,13 +2477,89 @@ function adminCard(r) {
   const accept = `<button class="btn ok sm" data-action="accept" data-id="${esc(r.id)}">✓ Accepter</button>`;
   const refuse = `<button class="btn danger-ghost sm" data-action="refuse" data-id="${esc(r.id)}">${r.status === 'approved' ? 'Retirer l’accès' : '✕ Refuser'}</button>`;
   const msg = `<button class="btn ghost sm" data-action="message" data-id="${esc(r.id)}">✉ Message</button>`;
-  const actions = r.status === 'pending' ? accept + refuse + msg : r.status === 'approved' ? refuse + msg : accept + msg;
+  const del = profile.is_owner && !r.is_owner && r.id !== profile.id
+    ? `<button class="btn danger-ghost sm" data-action="deleteMember" data-id="${esc(r.id)}">Supprimer le compte</button>` : '';
+  const protectedRow = r.is_owner || r.id === profile.id || (r.role === 'admin' && !profile.is_owner);
+  const actions = protectedRow ? (r.id === profile.id ? '' : (r.is_owner ? '' : msg))
+    : (r.status === 'pending' ? accept + refuse + msg : r.status === 'approved' ? refuse + msg : accept + msg) + del;
+  const tag = r.is_owner ? '<span class="pill">Propriétaire</span> ' : r.role === 'admin' ? '<span class="pill">Administrateur</span> ' : '';
 
   return `<article class="req-card">
-    <div class="req-top">${avatarHtml(r, url)}<div><h3>${esc(name)}</h3><div class="sub">${esc(r.email)}</div></div></div>
+    <div class="req-top">${avatarHtml(r, url)}<div>${tag}<h3>${esc(name)}</h3><div class="sub">${esc(r.email)}</div></div></div>
     <dl class="kv">${kv.map(([k, val]) => `<dt>${esc(k)}</dt><dd>${val}</dd>`).join('')}</dl>
-    <div class="req-actions">${actions}</div>
+    ${actions ? `<div class="req-actions">${actions}</div>` : ''}
   </article>`;
+}
+
+/* ---- Onglet « Équipe » : réservé au propriétaire ---- */
+const LOG_LABEL = { promote_admin: 'a nommé administrateur', demote_admin: 'a retiré le rôle d’administrateur à', admin_status_change: 'a changé le statut de', delete_member: 'a supprimé le compte de' };
+let teamQ = '';
+
+async function loadTeam() {
+  const list = $('#adminList');
+  if (!list) return;
+  const [admins, cands, log] = await Promise.all([
+    sb.from('profiles').select('*').eq('role', 'admin').order('is_owner', { ascending: false }).order('last_name'),
+    sb.from('profiles').select('*').eq('status', 'approved').eq('role', 'member').neq('member_type', 'student').order('last_name').limit(300),
+    sb.from('admin_log').select('*').order('at', { ascending: false }).limit(30),
+  ]);
+  const err = admins.error || cands.error || log.error;
+  if (err) { list.innerHTML = `<p class="err">${esc(errMsg(err))}</p>`; return; }
+  adminRows = new Map([...(admins.data || []), ...(cands.data || [])].map((r) => [r.id, r]));
+  teamData = { admins: admins.data || [], cands: cands.data || [], log: log.data || [] };
+  renderTeam();
+}
+let teamData = { admins: [], cands: [], log: [] };
+
+function renderTeam() {
+  const list = $('#adminList');
+  if (!list || adminTab !== 'team') return;
+  const row = (r, btns) => `<div class="team-row"><div><b>${esc(nameOf(r))}</b> ${r.is_owner ? '<span class="pill">Propriétaire</span>' : ''}<div class="sub small muted">${esc(r.email)}${r.job_title ? ' · ' + esc(r.job_title) : ''}</div></div><div class="row">${btns}</div></div>`;
+  const q = teamQ.trim().toLowerCase();
+  const cands = teamData.cands.filter((r) => !q || [r.first_name, r.last_name, r.email].some((x) => (x || '').toLowerCase().includes(q))).slice(0, 8);
+  list.innerHTML = `
+    <section class="team-box"><h3>Administrateurs</h3>
+      <p class="muted small">Les administrateurs valident les inscriptions, modèrent les offres et lisent les signalements. Eux seuls ne peuvent ni nommer ni retirer un autre administrateur : cela vous est réservé.</p>
+      ${teamData.admins.map((r) => row(r, r.is_owner || r.id === profile.id ? '' :
+        `<button class="btn ghost sm" data-action="demoteAdmin" data-id="${esc(r.id)}">Retirer le rôle</button><button class="btn danger-ghost sm" data-action="deleteMember" data-id="${esc(r.id)}">Supprimer le compte</button>`)).join('')}
+    </section>
+    <section class="team-box"><h3>Nommer un administrateur</h3>
+      <p class="muted small">Parmi les membres validés (anciens élèves ou personnel). Un lycéen ne peut pas être administrateur.</p>
+      <div class="field"><input type="search" id="teamSearch" value="${esc(teamQ)}" placeholder="Rechercher un nom ou un e-mail…" aria-label="Rechercher un membre"></div>
+      ${cands.length ? cands.map((r) => row(r, `<button class="btn sm" data-action="promoteAdmin" data-id="${esc(r.id)}">Nommer administrateur</button>`)).join('') : '<div class="empty">Aucun membre trouvé.</div>'}
+    </section>
+    <section class="team-box"><h3>Journal de vos décisions</h3>
+      ${teamData.log.length ? teamData.log.map((l) => `<div class="log-row small"><span class="muted">${fmtDate(l.at)}</span> — vous ${esc(LOG_LABEL[l.action] || l.action)} <b>${esc(l.target_email || '')}</b></div>`).join('') : '<div class="empty">Aucune décision enregistrée.</div>'}
+    </section>`;
+  const inp = $('#teamSearch');
+  inp.addEventListener('input', () => { teamQ = inp.value; renderTeam(); const i = $('#teamSearch'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); });
+}
+
+async function setRole(id, role) {
+  const { error } = await sb.from('profiles').update({ role }).eq('id', id);
+  if (error) { toast(errMsg(error), 'err'); return false; }
+  return true;
+}
+
+function confirmDeleteMember(id) {
+  const r = adminRows.get(id);
+  const box = openModal(`
+    <h2>Supprimer le compte de ${esc(nameOf(r))} ?</h2>
+    <p>Cette action est <b>définitive</b> : le profil, la photo, les messages et les inscriptions de cette personne seront effacés. Elle sera consignée dans votre journal.</p>
+    <p class="muted small">Pour simplement bloquer l’accès, utilisez plutôt « Retirer l’accès » : le compte reste récupérable.</p>
+    <div class="row end"><button class="btn ghost" data-action="closeModal">Annuler</button>
+    <button class="btn danger" id="delMemberOk">Supprimer définitivement</button></div>`);
+  $('#delMemberOk', box).addEventListener('click', async (e) => {
+    busy(e.target, true, 'Suppression…');
+    try {
+      const { data: files } = await sb.storage.from('avatars').list(id);
+      if (files?.length) await sb.storage.from('avatars').remove(files.map((f) => `${id}/${f.name}`));
+    } catch { /* la suppression du compte prime */ }
+    const { error } = await sb.rpc('delete_member', { target: id });
+    if (error) { busy(e.target, false); return toast(errMsg(error), 'err'); }
+    closeModal(); toast('Compte supprimé.');
+    adminRows.delete(id); loadStats(); loadAdminList();
+  });
 }
 
 async function setStatus(id, status, note = null) {
@@ -2504,6 +2582,24 @@ const actions = {
   refreshAdmin: () => { loadStats(); loadAdminList(); },
   adminTab: (el) => { adminTab = el.dataset.tab; $$('.tabs button').forEach((b) => b.setAttribute('aria-selected', b === el)); loadAdminList(); },
   closeModal: () => closeModal(),
+  deleteMember: (el) => confirmDeleteMember(el.dataset.id),
+  promoteAdmin: async (el) => {
+    const r = adminRows.get(el.dataset.id);
+    el.disabled = true;
+    if (await setRole(r.id, 'admin')) { toast(`${nameOf(r)} est maintenant administrateur.`); loadAdminList(); } else el.disabled = false;
+  },
+  demoteAdmin: (el) => {
+    const r = adminRows.get(el.dataset.id);
+    const box = openModal(`
+      <h2>Retirer le rôle d’administrateur à ${esc(nameOf(r))} ?</h2>
+      <p class="muted small">La personne reste membre mais ne pourra plus valider les inscriptions ni lire les signalements.</p>
+      <div class="row end"><button class="btn ghost" data-action="closeModal">Annuler</button>
+      <button class="btn danger" id="demoteOk">Retirer le rôle</button></div>`);
+    $('#demoteOk', box).addEventListener('click', async (e) => {
+      busy(e.target, true, 'Envoi…');
+      if (await setRole(r.id, 'member')) { closeModal(); toast('Rôle retiré.'); loadAdminList(); } else busy(e.target, false);
+    });
+  },
   retractMsg: (el) => confirmRetract(el.dataset.id),
   clearConv: (el) => confirmClear(el.dataset.id),
   newOffer: () => openOfferForm(),
