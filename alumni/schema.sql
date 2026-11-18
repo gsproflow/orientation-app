@@ -1338,6 +1338,64 @@ begin
   end;
 end $$;
 
+-- Nouveautés par rubrique (actualités / agenda / offres) : une pastille par rubrique,
+-- remise à zéro quand on ouvre la rubrique concernée.
+alter table public.profiles add column if not exists news_seen_at   timestamptz;
+alter table public.profiles add column if not exists events_seen_at timestamptz;
+alter table public.profiles add column if not exists offers_seen_at timestamptz;
+
+create or replace function public.content_unseen_by_kind()
+returns table (news bigint, events bigint, offers bigint)
+language sql stable security definer
+set search_path = public
+as $$
+  with me as (
+    select coalesce(content_seen_at, reviewed_at, created_at) as base,
+           news_seen_at, events_seen_at, offers_seen_at
+    from public.profiles where id = auth.uid()
+  )
+  select
+    (select count(*) from public.news n, me
+      where public.audience_ok(n.audience) and n.created_by is distinct from auth.uid()
+        and n.created_at > greatest(me.base, coalesce(me.news_seen_at, me.base))),
+    (select count(*) from public.events e, me
+      where public.audience_ok(e.audience) and e.created_by is distinct from auth.uid()
+        and e.created_at > greatest(me.base, coalesce(me.events_seen_at, me.base))),
+    (select count(*) from public.offers o, me
+      where o.status = 'published' and public.audience_ok(o.audience)
+        and o.author_id is distinct from auth.uid()
+        and coalesce(o.reviewed_at, o.created_at) > greatest(me.base, coalesce(me.offers_seen_at, me.base)));
+$$;
+
+-- Total des nouveautés (pastille de l'onglet « Actus »).
+create or replace function public.content_unseen()
+returns bigint
+language sql stable security definer
+set search_path = public
+as $$
+  select k.news + k.events + k.offers from public.content_unseen_by_kind() k;
+$$;
+
+-- Marquer une rubrique comme vue : 'news', 'events' ou 'offers'.
+create or replace function public.mark_section_seen(kind text)
+returns void
+language plpgsql security definer
+set search_path = public
+as $$
+begin
+  if kind = 'news' then
+    update public.profiles set news_seen_at = now() where id = auth.uid();
+  elsif kind = 'events' then
+    update public.profiles set events_seen_at = now() where id = auth.uid();
+  elsif kind = 'offers' then
+    update public.profiles set offers_seen_at = now() where id = auth.uid();
+  end if;
+end;
+$$;
+
+revoke all on function public.content_unseen_by_kind(), public.mark_section_seen(text) from public, anon;
+grant execute on function public.content_unseen_by_kind(), public.mark_section_seen(text) to authenticated;
+
 -- ---------------------------------------------------------------------
 -- 10. Statistiques pour l'administration (étape 7)
 --     Calculées par la base, réservées à l'administration.

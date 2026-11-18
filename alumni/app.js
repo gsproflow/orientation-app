@@ -182,9 +182,9 @@ function shell(inner, { wide = false } = {}) {
         ${approved ? `<a class="dlink ${act('#/')}" href="#/">Accueil</a>
           <a class="dlink ${act('#/annuaire')}" href="#/annuaire">Annuaire</a>
           <a class="dlink ${act('#/carte')}" href="#/carte">Carte</a>
-          <a class="dlink ${act('#/actus')}" href="#/actus">Actualités ${badge('js-content-badge')}</a>
-          <a class="dlink ${act('#/agenda')}" href="#/agenda">Agenda</a>
-          <a class="dlink ${act('#/offres')}" href="#/offres">Offres</a>
+          <a class="dlink ${act('#/actus')}" href="#/actus">Actualités ${badge('js-sec-badge" data-k="news')}</a>
+          <a class="dlink ${act('#/agenda')}" href="#/agenda">Agenda ${badge('js-sec-badge" data-k="events')}</a>
+          <a class="dlink ${act('#/offres')}" href="#/offres">Offres ${badge('js-sec-badge" data-k="offers')}</a>
           <a class="dlink ${act('#/messages')}" href="#/messages">Messages ${badge('js-msg-badge', 'navMsgBadge')}</a>` : ''}
         ${isAdmin ? `<a class="dlink ${act('#/admin')}" href="#/admin">Administration ${badge('js-admin-badge', 'navBadge')}</a>
           <a class="mlink ${act('#/admin')}" href="#/admin">⚙ Admin ${badge('js-admin-badge')}</a>` : ''}
@@ -214,7 +214,7 @@ function shell(inner, { wide = false } = {}) {
   window.scrollTo(0, 0);
   setUnread(unread);
   setAdminBadge(adminBadgeN);
-  setContentBadge(contentNew);
+  paintContentBadges();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1636,20 +1636,34 @@ let regCache = new Map();
 const contentUrlCache = new Map();
 const AUDIENCE = { all: 'Tous les membres', alumni: 'Alumni uniquement', student: 'Lycéens uniquement' };
 
-function setContentBadge(n) {
-  contentNew = Number(n) || 0;
+let contentBy = { news: 0, events: 0, offers: 0 };
+function paintContentBadges() {
+  contentNew = contentBy.news + contentBy.events + contentBy.offers;
   $$('.js-content-badge').forEach((b) => { b.textContent = contentNew; b.hidden = contentNew === 0; });
+  $$('.js-sec-badge').forEach((b) => { const n = contentBy[b.dataset.k] || 0; b.textContent = n; b.hidden = n === 0; });
+}
+function setContentBadge(n) { // n : nombre total (ancien appel) — conservé pour la remise à zéro à la déconnexion
+  if (Number(n) === 0) contentBy = { news: 0, events: 0, offers: 0 };
+  paintContentBadges();
 }
 async function refreshContentBadge() {
   if (!session || profile?.status !== 'approved') return;
-  const { data } = await sb.rpc('content_unseen');
-  setContentBadge(data);
+  const { data } = await sb.rpc('content_unseen_by_kind');
+  const r = Array.isArray(data) ? data[0] : data;
+  if (!r) return;
+  contentBy = { news: Number(r.news) || 0, events: Number(r.events) || 0, offers: Number(r.offers) || 0 };
+  paintContentBadges();
 }
-function markContentSeen() { sb.rpc('mark_content_seen').then(() => setContentBadge(0)); }
+// Marque une rubrique comme vue ('news' | 'events' | 'offers') et efface sa pastille.
+function markContentSeen(kind) {
+  contentBy[kind] = 0; paintContentBadges();
+  sb.rpc('mark_section_seen', { kind });
+}
 
 function onContent(kind, row) {
   if (!row || row.created_by === profile.id) return;
-  refreshContentBadge();
+  if (currentView === 'feed' && feedKind === kind) markContentSeen(kind); // on regarde déjà cette rubrique
+  else refreshContentBadge();
   if (currentView === 'feed' && !$('.modal')) loadFeed();
   if (currentView === 'home') loadHomeFeed();
   notifyUser(kind === 'news' ? 'Nouvelle actualité' : 'Nouvel événement', row.title);
@@ -1685,7 +1699,7 @@ function viewFeed(kind) {
       ${isAdmin ? '<button class="btn sm" data-action="publish">＋ Publier</button>' : ''}</div>
     ${feedSeg(kind)}
     <div id="feedList" class="feed"><p class="muted">Chargement…</p></div>`);
-  loadFeed().then(markContentSeen);
+  loadFeed().then(() => markContentSeen(kind));
 }
 
 async function loadFeed() {
@@ -2054,7 +2068,7 @@ const offerExpired = (o) => !!o.deadline && new Date(o.deadline + 'T23:59:59') <
 const offerDeadline = (o) => new Date(o.deadline + 'T12:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
 
 function feedSeg(cur) {
-  const l = (h, k, t) => `<a href="${h}" aria-current="${cur === k}">${t}</a>`;
+  const l = (h, k, t) => `<a href="${h}" aria-current="${cur === k}">${t}<span class="badge js-sec-badge" data-k="${k}" hidden></span></a>`;
   return `<div class="seg seg-links">${l('#/actus', 'news', 'Actualités')}${l('#/agenda', 'events', 'Agenda')}${l('#/offres', 'offers', 'Offres')}</div>`;
 }
 function adminSeg(cur) {
@@ -2075,7 +2089,7 @@ function viewOffers() {
     <div id="offerList" class="feed"><p class="muted">Chargement…</p></div>`);
   $('#offerQ').addEventListener('input', (e) => { offerQ = e.target.value; renderOffers(); });
   $('#offerExp').addEventListener('change', (e) => { offerShowExpired = e.target.checked; renderOffers(); });
-  loadOffers().then(markContentSeen);
+  loadOffers().then(() => markContentSeen('offers'));
 }
 
 async function loadOffers() {
@@ -2268,7 +2282,7 @@ function onOfferEvent({ eventType, new: row }) {
     return;
   }
   if (!mine && !admin && eventType === 'UPDATE' && row.status === 'published') {
-    refreshContentBadge();
+    if (currentView === 'offers') markContentSeen('offers'); else refreshContentBadge();
     notifyUser('Nouvelle offre', row.title);
     if (currentView === 'offers') loadOffers();
     if (currentView === 'home') loadHomeFeed();

@@ -443,3 +443,6 @@ details.past[open] { display: grid; gap: 12px; }
 /* Confirmations de lecture */
 .ticks { margin-left: .35rem; letter-spacing: -2px; font-weight: 700; color: var(--muted); }
 .ticks.read { color: #1d7fe0; }
+
+.seg-links a .badge { margin-left: .4rem; }
+.dlink .badge { margin-left: .3rem; }
