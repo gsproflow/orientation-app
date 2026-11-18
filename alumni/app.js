@@ -555,6 +555,7 @@ function viewForm() {
         <div class="switches">
           ${sw('contact_email', 'Par e-mail (mon adresse sera visible par les membres)', false)}
           <label class="switch"><input type="checkbox" name="contact_message" ${p.contact_message || p.contact_chat ? 'checked' : ''}><span class="track"></span><span>Par message / chat dans l’application</span></label>
+          ${sw('read_receipts', 'Confirmations de lecture (✓✓) dans les messages. Réciproque : si vous les désactivez, vous ne voyez plus celles des autres.', true)}
         </div>
       </section>
 
@@ -655,6 +656,7 @@ function readForm(form) {
     show_location: fd.has('show_location'),
     show_study: fd.has('show_study'),
     show_social: fd.has('show_social'),
+    read_receipts: fd.has('read_receipts'),
     show_email: fd.has('contact_email'), // l'adresse n'est partagée que si le contact par e-mail est accepté
   };
   if (t === 'alumni') {
@@ -1058,7 +1060,7 @@ async function pollLive() {
   if (profile.role === 'admin') refreshBadge();
   if (currentView === 'feed' && !$('.modal')) loadFeed();
   if (currentView === 'messages') loadConversationList();
-  if (currentView === 'conversation' && convOpen) fetchNewMessages();
+  if (currentView === 'conversation' && convOpen) { fetchNewMessages(); refreshReceipts(); }
 }
 
 function onChatMessageUpdate({ new: row }) {
@@ -1210,6 +1212,9 @@ async function viewConversation(id) {
   (msgs.data || []).forEach(appendMessage);
   if (!(msgs.data || []).length) $('#chatThread').innerHTML = '<p class="muted small" id="chatEmpty">Écrivez votre premier message ci-dessous.</p>';
   sb.rpc('mark_conversation_read', { cid: id }).then(refreshUnread);
+  receiptAt = null;
+  refreshReceipts();
+  startReceiptPolling();
 
   const form = $('#chatForm');
   const ta = $('#chatText');
@@ -1235,9 +1240,46 @@ function bubbleHtml(m) {
   const mine = m.sender_id === profile.id;
   const gone = !!m.retracted_at;
   const canRetract = mine && !gone && Date.now() - new Date(m.created_at).getTime() < RETRACT_MS;
-  return `<div class="bubble ${mine ? 'user' : 'admin'} ${gone ? 'gone' : ''}" data-mid="${esc(m.id)}"><span class="who">${fmtDateTime(m.created_at)}</span>${
+  return `<div class="bubble ${mine ? 'user' : 'admin'} ${gone ? 'gone' : ''}" data-mid="${esc(m.id)}" data-ts="${esc(m.created_at)}"><span class="who">${fmtDateTime(m.created_at)}${
+    mine && !gone ? ' <span class="ticks" aria-label="Envoyé">✓</span>' : ''}</span>${
     gone ? '<i>Message retiré</i>' : esc(m.body)}${
     canRetract ? `<button class="retract" data-action="retractMsg" data-id="${esc(m.id)}">Retirer</button>` : ''}</div>`;
+}
+
+/* ---- Confirmations de lecture : ✓ envoyé, ✓✓ lu ---- */
+let receiptAt = null; // date de dernière lecture par l'autre personne (null : inconnue ou désactivée)
+let receiptTimer = null;
+
+function applyReceipts() {
+  $$('#chatThread .bubble.user:not(.gone)').forEach((b) => {
+    const t = b.querySelector('.ticks');
+    if (!t) return;
+    const read = receiptAt && new Date(b.dataset.ts) <= receiptAt;
+    t.textContent = read ? '✓✓' : '✓';
+    t.classList.toggle('read', !!read);
+    t.setAttribute('aria-label', read ? 'Lu' : 'Envoyé');
+  });
+}
+
+async function refreshReceipts() {
+  const id = convOpen;
+  if (!id || currentView !== 'conversation') return;
+  const { data } = await sb.rpc('other_read_at', { cid: id });
+  if (convOpen !== id) return;
+  const row = Array.isArray(data) ? data[0] : data;
+  receiptAt = row?.enabled && row.read_at ? new Date(row.read_at) : null;
+  applyReceipts();
+}
+
+function startReceiptPolling() {
+  clearInterval(receiptTimer);
+  // Tant que la conversation est ouverte, on vérifie régulièrement si l'autre personne a lu.
+  receiptTimer = setInterval(() => {
+    if (currentView !== 'conversation' || !convOpen) { clearInterval(receiptTimer); return; }
+    if (document.hidden) return;
+    const pending = [...$$('#chatThread .bubble.user:not(.gone)')].some((b) => !receiptAt || new Date(b.dataset.ts) > receiptAt);
+    if (pending) refreshReceipts();
+  }, 4000);
 }
 
 function appendMessage(m) {
@@ -1252,6 +1294,7 @@ function appendMessage(m) {
     if (left > 0) setTimeout(() => el.querySelector('.retract')?.remove(), left); // le délai est écoulé : le lien disparaît
   }
   box.scrollTop = box.scrollHeight;
+  applyReceipts();
 }
 
 function markRetracted(id) {

@@ -710,6 +710,39 @@ begin
 end;
 $$;
 
+-- Confirmations de lecture (✓✓). Réciproque : si l'un des deux les désactive, aucun des deux ne les voit.
+alter table public.profiles add column if not exists read_receipts boolean not null default true;
+
+-- Quand l'autre participant a-t-il lu la conversation pour la dernière fois ?
+create or replace function public.other_read_at(cid uuid)
+returns table (enabled boolean, read_at timestamptz)
+language plpgsql stable security definer
+set search_path = public
+as $$
+declare
+  other uuid;
+  mine boolean;
+  theirs boolean;
+begin
+  if not public.is_participant(cid) then
+    raise exception 'Conversation introuvable';
+  end if;
+  select case when c.user_a = auth.uid() then c.user_b else c.user_a end into other
+  from public.conversations c where c.id = cid;
+  select p.read_receipts into mine from public.profiles p where p.id = auth.uid();
+  select p.read_receipts into theirs from public.profiles p where p.id = other;
+  if not coalesce(mine, true) or not coalesce(theirs, true) then
+    return query select false, null::timestamptz;
+    return;
+  end if;
+  return query select true, (select r.last_read_at from public.conversation_reads r
+                             where r.conversation_id = cid and r.user_id = other);
+end;
+$$;
+
+revoke all on function public.other_read_at(uuid) from public, anon;
+grant execute on function public.other_read_at(uuid) to authenticated;
+
 -- Supprimer une conversation « pour moi ». L'autre personne garde la sienne ; une conversation
 -- signalée n'est jamais effacée ; elle l'est définitivement quand les deux l'ont supprimée.
 create or replace function public.clear_conversation(cid uuid)

@@ -439,3 +439,7 @@ details.past[open] { display: grid; gap: 12px; }
 .team-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--line, #e2e6ee); }
 .team-row .row { gap: 6px; flex-wrap: wrap; }
 .log-row { padding: 6px 0; border-top: 1px solid var(--line, #e2e6ee); }
+
+/* Confirmations de lecture */
+.ticks { margin-left: .35rem; letter-spacing: -2px; font-weight: 700; color: var(--muted); }
+.ticks.read { color: #1d7fe0; }
