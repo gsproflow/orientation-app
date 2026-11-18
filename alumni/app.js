@@ -1493,7 +1493,7 @@ function localTimeHtml(r) {
 }
 
 function loadMapLibs() {
-  if (window.L && window.L.markerClusterGroup) return loadTz();
+  if (window.L && window.L.markerClusterGroup) return Promise.resolve();
   if (!mapLibs) {
     mapLibs = new Promise((resolve, reject) => {
       ['vendor/leaflet/leaflet.css', 'vendor/markercluster/MarkerCluster.css', 'vendor/markercluster/MarkerCluster.Default.css']
@@ -1502,7 +1502,7 @@ function loadMapLibs() {
         const sc = document.createElement('script'); sc.src = src; sc.onload = ok; sc.onerror = () => ko(new Error('script')); document.head.appendChild(sc);
       });
       add('vendor/leaflet/leaflet.js').then(() => add('vendor/markercluster/leaflet.markercluster.js'))
-        .then(() => loadTz()).then(resolve, (e) => { mapLibs = null; reject(e); });
+        .then(resolve, (e) => { mapLibs = null; reject(e); });
     });
   }
   return mapLibs;
@@ -1554,7 +1554,6 @@ function popupHtml(r) {
       <div><b>${esc(name)}</b><div class="small muted">${r.graduation_year ? 'Promo ' + esc(r.graduation_year) : 'Ancien élève'}</div></div></div>
     ${study ? `<p class="small">${study}</p>` : ''}
     <p class="small muted">📍 ${[r.city, r.country].filter(Boolean).map(esc).join(', ')}</p>
-    ${localTimeHtml(r)}
     <button class="btn sm" data-action="viewMember" data-id="${esc(r.id)}">Voir le profil</button></div>`;
 }
 
