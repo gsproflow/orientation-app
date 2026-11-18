@@ -890,6 +890,8 @@ async function viewDirectory() {
   if (!list || currentView !== 'directory') return;
   if (error) { list.innerHTML = `<p class="err">${esc(errMsg(error))}</p>`; return; }
   dirRows = data || [];
+  await loadTz();
+  if (!$('#dirList') || currentView !== 'directory') return;
 
   const countries = [...new Set(dirRows.map((r) => r.country).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
   const years = [...new Set(dirRows.map((r) => r.graduation_year).filter(Boolean))].sort((a, b) => b - a);
@@ -947,6 +949,7 @@ function memberCard(r) {
       <div class="sub">${r.graduation_year ? 'Promo ' + esc(r.graduation_year) : 'Ancien élève'}</div></div></div>
     ${study ? `<p class="m-study">${study}</p>` : ''}
     ${place ? `<p class="m-place">📍 ${place}</p>` : ''}
+    ${localTimeHtml(r)}
     ${tags ? `<div class="tags">${tags}</div>` : ''}
     <button class="btn ghost sm" data-action="viewMember" data-id="${esc(r.id)}">Voir le profil</button>
   </article>`;
@@ -1456,8 +1459,41 @@ function destroyMap() {
   mapObj = null; cluster = null; mapPts = []; mapRows = [];
 }
 
+/* ---- Heure locale (fuseau déduit des coordonnées ; bibliothèque tz-lookup, domaine public) ---- */
+let tzLib = null;
+function loadTz() {
+  if (window.tzlookup) return Promise.resolve();
+  if (!tzLib) {
+    tzLib = new Promise((resolve) => {
+      const sc = document.createElement('script'); sc.src = 'vendor/tz-lookup/tz.js';
+      sc.onload = resolve; sc.onerror = () => { tzLib = null; resolve(); }; document.head.appendChild(sc);
+    });
+  }
+  return tzLib;
+}
+
+// « 🕒 14 h 32 là-bas · 1 h de moins que vous » ; chaîne vide si le fuseau est inconnu.
+function localTimeHtml(r) {
+  if (!window.tzlookup || r.lat == null || r.lng == null) return '';
+  try {
+    const zone = window.tzlookup(Number(r.lat), Number(r.lng));
+    const now = new Date();
+    const hm = (z) => new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: z }).format(now).replace(':', ' h ');
+    const offMin = (z) => {
+      const f = new Intl.DateTimeFormat('en-US', { timeZone: z, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' }).formatToParts(now);
+      const g = (t) => Number(f.find((x) => x.type === t).value);
+      return Math.round((Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute')) - Math.floor(now.getTime() / 60000) * 60000) / 60000);
+    };
+    const diff = offMin(zone) - offMin(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    const h = Math.abs(diff) / 60;
+    const hs = Number.isInteger(h) ? `${h} h` : `${Math.floor(h)} h ${String(Math.abs(diff) % 60).padStart(2, '0')}`;
+    const rel = diff === 0 ? 'même heure que vous' : `${hs} de ${diff > 0 ? 'plus' : 'moins'} que vous`;
+    return `<p class="small localtime">🕒 <b>${esc(hm(zone))}</b> là-bas <span class="muted">· ${rel}</span></p>`;
+  } catch { return ''; }
+}
+
 function loadMapLibs() {
-  if (window.L && window.L.markerClusterGroup) return Promise.resolve();
+  if (window.L && window.L.markerClusterGroup) return loadTz();
   if (!mapLibs) {
     mapLibs = new Promise((resolve, reject) => {
       ['vendor/leaflet/leaflet.css', 'vendor/markercluster/MarkerCluster.css', 'vendor/markercluster/MarkerCluster.Default.css']
@@ -1466,7 +1502,7 @@ function loadMapLibs() {
         const sc = document.createElement('script'); sc.src = src; sc.onload = ok; sc.onerror = () => ko(new Error('script')); document.head.appendChild(sc);
       });
       add('vendor/leaflet/leaflet.js').then(() => add('vendor/markercluster/leaflet.markercluster.js'))
-        .then(resolve, (e) => { mapLibs = null; reject(e); });
+        .then(() => loadTz()).then(resolve, (e) => { mapLibs = null; reject(e); });
     });
   }
   return mapLibs;
@@ -1518,6 +1554,7 @@ function popupHtml(r) {
       <div><b>${esc(name)}</b><div class="small muted">${r.graduation_year ? 'Promo ' + esc(r.graduation_year) : 'Ancien élève'}</div></div></div>
     ${study ? `<p class="small">${study}</p>` : ''}
     <p class="small muted">📍 ${[r.city, r.country].filter(Boolean).map(esc).join(', ')}</p>
+    ${localTimeHtml(r)}
     <button class="btn sm" data-action="viewMember" data-id="${esc(r.id)}">Voir le profil</button></div>`;
 }
 
