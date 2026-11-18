@@ -77,7 +77,7 @@ function errMsg(err) {
   ];
   for (const [re, fr] of map) if (re.test(m)) return fr;
   // Messages métier déjà en français renvoyés par la base (schema.sql).
-  if (/^(Profil incomplet|Modification non autorisée|Changement de statut|Le type de compte|Trop de messages|Cette personne|Limite atteinte|Destinataire|Vous ne pouvez pas|Accès réservé|Conversation introuvable|Ce type de compte|Ce message ne peut plus|Message introuvable|Le statut de propriétaire|Un lycéen ne peut pas|Seul le propriétaire|Le propriétaire ne peut|Un propriétaire ne|Réservé au propriétaire|Compte introuvable|Ce compte ne peut)/.test(m)) return m;
+  if (/^(Profil incomplet|Modification non autorisée|Changement de statut|Le type de compte|Trop de messages|Cette personne|Limite atteinte|Destinataire|Vous ne pouvez pas|Accès réservé|Conversation introuvable|Ce type de compte|Ce message ne peut plus|Message introuvable|Le statut de propriétaire|Seul le personnel|Seul le propriétaire|Le propriétaire ne peut|Un propriétaire ne|Réservé au propriétaire|Compte introuvable|Ce compte ne peut)/.test(m)) return m;
   return 'Une erreur est survenue. Réessayez, ou contactez l’administration si cela continue. (' + m + ')';
 }
 
@@ -2537,7 +2537,7 @@ async function loadTeam() {
   if (!list) return;
   const [admins, cands, log] = await Promise.all([
     sb.from('profiles').select('*').eq('role', 'admin').order('is_owner', { ascending: false }).order('last_name'),
-    sb.from('profiles').select('*').eq('status', 'approved').eq('role', 'member').neq('member_type', 'student').order('last_name').limit(300),
+    sb.from('profiles').select('*').eq('status', 'approved').eq('role', 'member').eq('member_type', 'staff').order('last_name').limit(300),
     sb.from('admin_log').select('*').order('at', { ascending: false }).limit(30),
   ]);
   const err = admins.error || cands.error || log.error;
@@ -2561,7 +2561,7 @@ function renderTeam() {
         `<button class="btn ghost sm" data-action="demoteAdmin" data-id="${esc(r.id)}">Retirer le rôle</button><button class="btn danger-ghost sm" data-action="deleteMember" data-id="${esc(r.id)}">Supprimer le compte</button>`)).join('')}
     </section>
     <section class="team-box"><h3>Nommer un administrateur</h3>
-      <p class="muted small">Parmi les membres validés (anciens élèves ou personnel). Un lycéen ne peut pas être administrateur.</p>
+      <p class="muted small">Parmi les membres validés du personnel du lycée. Les anciens élèves et les lycéens ne peuvent pas être administrateurs.</p>
       <div class="field"><input type="search" id="teamSearch" value="${esc(teamQ)}" placeholder="Rechercher un nom ou un e-mail…" aria-label="Rechercher un membre"></div>
       ${cands.length ? cands.map((r) => row(r, `<button class="btn sm" data-action="promoteAdmin" data-id="${esc(r.id)}">Nommer administrateur</button>`)).join('') : '<div class="empty">Aucun membre trouvé.</div>'}
     </section>

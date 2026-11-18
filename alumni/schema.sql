@@ -266,8 +266,8 @@ begin
       raise exception 'Le statut de propriétaire ne se modifie que depuis Supabase';
     end if;
 
-    if new.role = 'admin' and old.role is distinct from 'admin' and new.member_type = 'student' then
-      raise exception 'Un lycéen ne peut pas être administrateur';
+    if new.role = 'admin' and old.role is distinct from 'admin' and new.member_type <> 'staff' then
+      raise exception 'Seul le personnel du lycée peut être administrateur';
     end if;
 
     if public.is_owner() then
